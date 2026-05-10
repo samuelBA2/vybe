@@ -1,0 +1,190 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    String     @id @default(uuid())
+  email String     @unique
+  firstname  String
+  lastname   String
+  password   String
+  role       Role
+  twoFAsecret String?
+  createdAt  DateTime   @default(now())
+
+  organizer Organizer?
+  spectator Spectator?
+  agent     Agent? 
+}
+
+enum Role {
+  ADMIN
+  ORGANIZER
+  AGENT
+  SPECTATOR
+}
+
+// Organisateur
+model Organizer {
+  id        String  @id @default(uuid())
+  userId    String  @unique
+  user      User    @relation(fields: [userId], references: [id])
+  walletBalance Float @default(0)
+  events    Event[]
+  agents    Agent[]
+}
+
+// Événement
+model Event {
+  id            String   @id @default(uuid())
+  organizerId   String
+  organizer     Organizer @relation(fields: [organizerId], references: [id])
+  title         String
+  description   String
+  startDate     DateTime
+  endDate       DateTime
+  location      String
+  gpsLat        Float?
+  gpsLng        Float?
+  purchaseDeadline DateTime
+  dressCode     String?
+  category      EventCategory
+  status        EventStatus  @default(DRAFT)
+  termsAccepted Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+
+  ticketCategories TicketCategory[]
+  mediaFiles       EventMedia[]
+}
+
+model EventMedia {
+  id        String    @id @default(uuid())
+  eventId   String
+  event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  url       String
+  fileKey   String    // clé S3/R2
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  mediaType MediaType
+  createdAt DateTime  @default(now())
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  DOCUMENT
+  DESIGN   // AI, PSD, EPS, TIFF...
+  OTHER
+}
+
+enum EventCategory {
+  CONCERT
+  FESTIVAL
+  CONFERENCE
+  SPORT
+  CULTURAL
+  THEATRE
+  OTHER
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  CANCELLED
+}
+
+
+// Catégorie de billet
+model TicketCategory {
+  id           String  @id @default(uuid())
+  eventId      String
+  event        Event   @relation(fields: [eventId], references: [id])
+  name         String  // Standard, VIP, VVIP...
+  price        Float
+  totalStock   Int     // Capacité max
+  soldCount    Int     @default(0)
+  maxPerOrder  Int     @default(10) // Max billets par commande
+  benefits     String?
+  
+  tickets      Ticket[]
+  orders       Order[]
+}
+
+// Commande (1 commande = N billets)
+model Order {
+  id               String      @id @default(uuid())
+  spectatorId      String
+  spectator        Spectator   @relation(fields: [spectatorId], references: [id])
+  ticketCategoryId String
+  ticketCategory   TicketCategory @relation(fields: [ticketCategoryId], references: [id])
+  quantity         Int
+  unitPrice        Float
+  totalAmount      Float
+  platformFee      Float
+  organizerAmount  Float
+  paymentStatus    PaymentStatus @default(PENDING)
+  paymentRef       String?
+  createdAt        DateTime    @default(now())
+
+  tickets          Ticket[]
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// Billet individuel (1 billet = 1 QR code)
+model Ticket {
+  id               String    @id @default(uuid())
+  orderId          String
+  order            Order     @relation(fields: [orderId], references: [id])
+  ticketCategoryId String
+  ticketCategory   TicketCategory @relation(fields: [ticketCategoryId], references: [id])
+  qrToken          String    @unique // UUID v4 cryptographique
+  qrStatus         QRStatus  @default(UNUSED)
+  scannedAt        DateTime?
+  scannedByAgentId String?
+
+  expiresAt         DateTime
+  pdfUrl           String?
+  createdAt        DateTime  @default(now())
+
+  @@index([qrToken])   // Index pour les lookups rapides de scan
+  @@index([expiresAt]) // Index pour le nettoyage automatique
+}
+
+enum QRStatus {
+  UNUSED
+  USED
+  CANCELLED
+}
+
+// Agent de sécurité
+model Agent {
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id])
+  organizerId String
+  organizer   Organizer @relation(fields: [organizerId], references: [id])
+}
+
+model Spectator {
+  id     String  @id @default(uuid())
+  userId String  @unique
+  user   User    @relation(fields: [userId], references: [id])
+  orders Order[]
+}
