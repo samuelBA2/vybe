@@ -3,7 +3,6 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -12,46 +11,66 @@ datasource db {
 }
 
 model User {
-  id    String     @id @default(uuid())
-  email String     @unique
-  firstname  String
-  lastname   String
-  password   String
+  id         String     @id @default(uuid())
+  email      String?    @unique
+  phone      String?    @unique
+  hashedPassword String?
+  firstname  String?
+  lastname   String?
   role       Role
+  emailVerified Boolean @default(false)
+  phoneVerified Boolean @default(false)
   twoFAsecret String?
   createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 
-  organizer Organizer?
-  spectator Spectator?
-  agent     Agent? 
+  events Event[]
+  participations EventParticipant[]
+  agentAccess Agent[]
+
+  orders Order[]
+  
+  otpVerications OtpVerification[]
+}
+
+model EventParticipant {
+  id        String   @id @default(uuid())
+  joinedAt  DateTime @default(now())
+
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id])
+
+
+  UserId    String
+  user      User     @relation(fields: [UserId], references: [id])
+
+  @@unique([eventId, UserId]) // Un utilisateur ne peut rejoindre un événement qu'une seule fois
 }
 
 enum Role {
   ADMIN
-  ORGANIZER
   AGENT
-  SPECTATOR
 }
 
-// Organisateur
-model Organizer {
-  id        String  @id @default(uuid())
-  userId    String  @unique
-  user      User    @relation(fields: [userId], references: [id])
-  walletBalance Float @default(0)
-  events    Event[]
-  agents    Agent[]
+model OtpVerification {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  otp       String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
 }
 
 // Événement
 model Event {
   id            String   @id @default(uuid())
-  organizerId   String
-  organizer     Organizer @relation(fields: [organizerId], references: [id])
   title         String
   description   String
   startDate     DateTime
   endDate       DateTime
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id])
   location      String
   gpsLat        Float?
   gpsLng        Float?
@@ -62,8 +81,11 @@ model Event {
   termsAccepted Boolean      @default(false)
   createdAt     DateTime     @default(now())
 
+  participants EventParticipant[] 
+
   ticketCategories TicketCategory[]
   mediaFiles       EventMedia[]
+  agents           Agent[]
 }
 
 model EventMedia {
@@ -124,8 +146,8 @@ model TicketCategory {
 // Commande (1 commande = N billets)
 model Order {
   id               String      @id @default(uuid())
-  spectatorId      String
-  spectator        Spectator   @relation(fields: [spectatorId], references: [id])
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
   ticketCategoryId String
   ticketCategory   TicketCategory @relation(fields: [ticketCategoryId], references: [id])
   quantity         Int
@@ -176,15 +198,16 @@ enum QRStatus {
 // Agent de sécurité
 model Agent {
   id          String    @id @default(uuid())
-  userId      String    @unique
-  user        User      @relation(fields: [userId], references: [id])
-  organizerId String
-  organizer   Organizer @relation(fields: [organizerId], references: [id])
-}
+  firstname   String
+  lastname    String
+  code        String    @unique //"AG-LJXW1"
+  active      Boolean   @default(true)
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
 
-model Spectator {
-  id     String  @id @default(uuid())
-  userId String  @unique
-  user   User    @relation(fields: [userId], references: [id])
-  orders Order[]
+  eventId     String
+  event       Event    @relation(fields: [eventId], references: [id])
+
+  userId      String?   
+  user        User?    @relation(fields: [userId], references: [id])
 }

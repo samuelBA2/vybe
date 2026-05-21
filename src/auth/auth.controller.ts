@@ -1,15 +1,44 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { CreateAuthDto } from './dto/create-auth.dto';
 import { UpdateAuthDto } from './dto/update-auth.dto';
+import { RegisterEmailDto } from './dto/register-mail.dto';
+import { RegisterPhoneDto } from './dto/register-phone.dto';
+import { LoginEmailDto } from './dto/login-mail.dto';
+import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
+import { LoginPhoneDto } from './dto/login-phone.dto';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post()
-  create(@Body() createAuthDto: CreateAuthDto) {
-    return this.authService.create(createAuthDto);
+  @Post('register/email')
+  registerEmail(@Body() dto: RegisterEmailDto) {
+    return this.authService.registerEmail(dto);
+  }
+
+  @Post('login/email')
+  loginEmail(@Body() dto: LoginEmailDto) {
+    return this.authService.loginEmail(dto);
+  }
+
+  @Post('register/phone')
+  registerPhone(@Body() dto: RegisterPhoneDto) {
+    return this.authService.registerPhone(dto);
+  }
+
+  @Post('login/phone')
+  loginPhone(@Body() dto: LoginPhoneDto) {
+    return this.authService.loginPhone(dto);
+  }
+
+  @Post('verify-otp')
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto);
+  }
+
+  @Post('phone/send')
+  sendPhoneOtp(@Body() dto: RegisterPhoneDto) {
+    return this.authService.sendPhoneOtp(dto);
   }
 
   @Get()
