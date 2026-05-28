@@ -8,6 +8,7 @@ import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { OtpModule } from './otp/otp.module';
+import { SmsModule } from './sms/sms.module';
 
 
 
@@ -19,6 +20,7 @@ import { OtpModule } from './otp/otp.module';
   }),
   UsersModule,
   OtpModule,
+  SmsModule,
 
   ],
   controllers: [],

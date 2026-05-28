@@ -11,17 +11,27 @@ import { RegisterPhoneDto } from './dto/register-phone.dto';
 import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto'
 import { LoginPhoneDto } from './dto/login-phone.dto';
+import { SmsService } from 'src/sms/sms.service';
+import { Message } from 'twilio/lib/twiml/MessagingResponse';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
   export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    private smsService: SmsService,
+    private config: ConfigService,
   ) {}
 
   // Method to sign JWT token partagé
-  signToken(payload: { sub: string; role: string }) {
-    return this.jwt.sign(payload)
+  private signToken(payload: { sub: string; role: string }) {
+   const secret = this.config.get<string>('JWT_SECRET')
+
+   if (!secret) {
+    throw new Error('JWT secret not configured')
+   }
+   return this.jwt.sign(payload, { secret, expiresIn: '1h' })
   }
 //inscription par email
   async registerEmail(dto: RegisterEmailDto) {
@@ -65,7 +75,7 @@ import { LoginPhoneDto } from './dto/login-phone.dto';
 
   async registerPhone(dto: RegisterPhoneDto){
     const exists = await this.prisma.user.findUnique({ where: { phone: dto.phone } })
-    if (exists) throw new ConflictException('Numero de telephone déjà utilisé')
+    if (exists) throw new ConflictException('Numero de telephone déjà utilisé') //📝à changer 
     
       const otp = await this.generateUniqueOtp()
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // OTP valable 5 minutes
@@ -107,32 +117,34 @@ async loginPhone(dto: LoginPhoneDto) {
     create: { phone: dto.phone, otp, expiresAt },
   })
 
-  // envoyer le SMS ici (Twilio, etc.)
-  console.log(`OTP pour ${dto.phone} : ${otp}`)
+  await this.smsService.sendOtp(dto.phone, otp)
 
   return { message: 'Code envoyé' }
 }
 //verification du code OTP
 async verifyOtp(dto: VerifyOtpDto) {
-    const record = await this.prisma.otpVerification.findUnique({ where: { phone: dto.identifer } })
-    if (!record || record.otp !== dto.code || record.expiresAt < new Date()) {
+    const record = await this.prisma.otpVerification.findUnique({ where: { phone: dto.phone } })
+    if (!record || record.otp !== String(dto.otp) || record.expiresAt < new Date()) {
       throw new BadRequestException('OTP invalide ou expiré')
     }
-
+    
     const user = await this.prisma.user.upsert({
       where: { phone: dto.phone },
       update: { phoneVerified: true },
       create: { phone: dto.phone, phoneVerified: true, role: $Enums.Role.ADMIN },
     })
-  await this.prisma.otpVerification.delete({ where: { phone: dto.identifer } })
-    return { token: this.signToken({ sub: user.id, role: 'user' }) }
+
+  await this.prisma.otpVerification.delete({ where: { phone: dto.phone } })
+    const token = this.signToken({ sub: user.id, role: user.role }) 
+
+    return {success: true, message:"Code verifié avec succès.",token}
   }
 
   private async generateUniqueOtp(): Promise<string> {
     let otp: string =''
     let exists: boolean = true
     while (exists) {
-      let otp = String(randomInt(100000, 999999))
+      otp = String(randomInt(100000, 999999))
       const found = await this.prisma.otpVerification.findFirst({ where: { otp, expiresAt: { gt: new Date()}} })
       exists = !!found
     }
