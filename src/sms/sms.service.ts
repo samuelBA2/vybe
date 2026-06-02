@@ -4,6 +4,7 @@ import { UpdateSmDto } from './dto/update-sm.dto';
 import { ConfigService } from '@nestjs/config';
 import { Twilio } from 'twilio';
 
+
 @Injectable()
 export class SmsService {
   private client: Twilio;
@@ -15,9 +16,9 @@ export class SmsService {
     );
   }
 
-  async sendOtp(to: string, code: string) {
+  async sendOtp(to: string, message: string) {
     return this.client.messages.create({
-      body:`Your verification code is: ${code}`,
+      body: message,
       from: this.config.get<string>('TWILIO_PHONE_NUMBER'),
       to,
     });

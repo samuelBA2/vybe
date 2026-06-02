@@ -1,11 +1,14 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UpdateAuthDto } from './dto/update-auth.dto';
 import { RegisterEmailDto } from './dto/register-mail.dto';
-import { RegisterPhoneDto } from './dto/register-phone.dto';
+import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
 import { LoginPhoneDto } from './dto/login-phone.dto';
+import { CompleteProfileDto } from './dto/complete-profile.dto';
+import { UseGuards } from '@nestjs/common';
+
 
 @Controller('auth')
 export class AuthController {
@@ -21,25 +24,41 @@ export class AuthController {
     return this.authService.loginEmail(dto);
   }
 
-  @Post('register/phone')
-  registerPhone(@Body() dto: RegisterPhoneDto) {
-    return this.authService.registerPhone(dto);
-  }
-
   @Post('login/phone')
   loginPhone(@Body() dto: LoginPhoneDto) {
     return this.authService.loginPhone(dto);
   }
 
-  @Post('verify-otp')
+  @Post('phone/verify')
   verifyOtp(@Body() dto: VerifyOtpDto) {
     return this.authService.verifyOtp(dto);
   }
 
   @Post('phone/send')
-  sendPhoneOtp(@Body() dto: RegisterPhoneDto) {
+  sendPhoneOtp(@Body() dto: SendPhoneOtpDto) {
     return this.authService.sendPhoneOtp(dto);
   }
+
+  @Post('email/send')
+  sendEmailOtp(@Body() dto: RegisterEmailDto) {
+    return this.authService.sendEmailOtp(dto);
+  }
+
+  // @Post('email/verify')
+  // verifyEmailOtp(@Body() dto: VerifyOtpDto) {
+  //   return this.authService.verifyEmailOtp(dto);
+  // }
+
+  @Post('complete-profile')
+  completeProfile(@Req() req, @Body() dto: CompleteProfileDto) {
+    return this.authService.completeProfile(req, dto);
+  }
+
+  // @Post()
+  // @UseGuards(JwtAuthGuard)
+  // logout() {
+  //   return this.authService.logout();
+  // }
 
   @Get()
   findAll() {

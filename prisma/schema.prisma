@@ -20,7 +20,6 @@ model User {
   role       Role
   emailVerified Boolean @default(false)
   phoneVerified Boolean @default(false)
-  twoFAsecret String?
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
@@ -31,6 +30,11 @@ model User {
   orders Order[]
   
   otpVerications OtpVerification[]
+}
+
+model UsedToken {
+  jti       String   @id
+  createdAt DateTime @default(now())
 }
 
 model EventParticipant {
@@ -54,7 +58,8 @@ enum Role {
 
 model OtpVerification {
   id        String   @id @default(uuid())
-  phone     String   @unique
+  phone     String?   @unique
+  email     String?   @unique
   otp       String
   expiresAt DateTime
   createdAt DateTime @default(now())
