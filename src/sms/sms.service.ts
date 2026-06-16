@@ -1,6 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { CreateSmDto } from './dto/create-sm.dto';
-import { UpdateSmDto } from './dto/update-sm.dto';
 import { ConfigService } from '@nestjs/config';
 import { Twilio } from 'twilio';
 

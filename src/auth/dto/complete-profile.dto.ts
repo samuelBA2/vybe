@@ -1,4 +1,4 @@
-import { IsString, MinLength, Matches, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments} from 'class-validator'
+import { IsString, IsEmail, MinLength, Matches, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments} from 'class-validator'
 
 @ValidatorConstraint({ name: 'MatchPassword', async: false })
 class MatchPassword implements ValidatorConstraintInterface {

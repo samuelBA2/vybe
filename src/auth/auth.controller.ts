@@ -1,12 +1,14 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { UpdateAuthDto } from './dto/update-auth.dto';
-import { RegisterEmailDto } from './dto/register-mail.dto';
+// import { UpdateAuthDto } from './dto/update-auth.dto';
+import { Headers } from '@nestjs/common'
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
+import { VerifyEmailOtpDto } from './dto/verify-mail.dto';
 import { LoginPhoneDto } from './dto/login-phone.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
+import {SendEmailOtpDto } from './dto/send-mail-otp.dto'
 import { UseGuards } from '@nestjs/common';
 
 
@@ -14,9 +16,14 @@ import { UseGuards } from '@nestjs/common';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('register/email')
-  registerEmail(@Body() dto: RegisterEmailDto) {
-    return this.authService.registerEmail(dto);
+  @Post('email/send')
+  registerEmail(@Body() dto: SendEmailOtpDto) {
+    return this.authService.sendEmailOtp(dto);
+  }
+
+  @Post('phone/send')
+  sendPhoneOtp(@Body() dto: SendPhoneOtpDto) {
+    return this.authService.sendPhoneOtp(dto);
   }
 
   @Post('login/email')
@@ -30,24 +37,16 @@ export class AuthController {
   }
 
   @Post('phone/verify')
-  verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtp(dto);
+  verifyOtp(@Body() dto: VerifyOtpDto, @Headers('authorization') auth: string, ) {
+    const token = auth?.replace('Bearer ', '');
+    return this.authService.verifyPhoneOtp(dto, token)
   }
 
-  @Post('phone/send')
-  sendPhoneOtp(@Body() dto: SendPhoneOtpDto) {
-    return this.authService.sendPhoneOtp(dto);
+  @Post('email/verify')
+  verifyEmailOtp(@Body() dto: VerifyEmailOtpDto, @Headers('authorization') auth: string,) {
+    const token = auth?.replace('Bearer ','');
+    return this.authService.verifyEmailOtp(dto, token)
   }
-
-  @Post('email/send')
-  sendEmailOtp(@Body() dto: RegisterEmailDto) {
-    return this.authService.sendEmailOtp(dto);
-  }
-
-  // @Post('email/verify')
-  // verifyEmailOtp(@Body() dto: VerifyOtpDto) {
-  //   return this.authService.verifyEmailOtp(dto);
-  // }
 
   @Post('complete-profile')
   completeProfile(@Req() req, @Body() dto: CompleteProfileDto) {
@@ -68,15 +67,5 @@ export class AuthController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.authService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateAuthDto: UpdateAuthDto) {
-    return this.authService.update(+id, updateAuthDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.authService.remove(+id);
   }
 }

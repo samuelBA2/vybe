@@ -1,6 +1,6 @@
 import { IsEmail } from 'class-validator'
 
 export class SendEmailOtpDto {
-    @IsEmail()
+    @IsEmail({},{ message: "L'adresse e-mail n'est pas valide."})
     email: string
 }

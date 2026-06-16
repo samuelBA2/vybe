@@ -1,17 +1,16 @@
 import { Injectable, UnauthorizedException, BadRequestException, ConflictException, Body, Req } from '@nestjs/common';
-import { UpdateAuthDto } from './dto/update-auth.dto';
+// import { UpdateAuthDto } from './dto/update-auth.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { $Enums } from '@prisma/client';
-import { RegisterEmailDto } from './dto/register-mail.dto';
-import { RegisterPhoneDto } from './dto/register-phone.dto';
 import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto'
+import { VerifyEmailOtpDto } from 'src/auth/dto/verify-mail.dto'
 import { LoginPhoneDto } from './dto/login-phone.dto';
 import { SmsService } from 'src/sms/sms.service';
-import { Message } from 'twilio/lib/twiml/MessagingResponse';
+import { OtpService } from 'src/otp/otp.service';
 import { ConfigService } from '@nestjs/config';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
@@ -25,37 +24,24 @@ import { randomUUID } from 'crypto';
     private jwt: JwtService,
     private smsService: SmsService,
     private config: ConfigService,
+    private readonly OtpService: OtpService,
   ) {}
 
-  // Method to sign JWT token partagé
+  // Method to sign JWT tokens partagés (access + refresh)
   private signToken(payload: { sub: string; role: string }) {
   const secret = this.config.get<string>('JWT_SECRET')
 
   if (!secret) {
     throw new Error('JWT secret not configured')
   }
-  return this.jwt.sign(payload, { secret, expiresIn: '1h' })
+
+  const accessToken = this.jwt.sign(payload, { secret, expiresIn: '30m' })
+  const refreshToken = this.jwt.sign({ ...payload, type: 'refresh' }, { secret, expiresIn: '30d' })
+
+  return { accessToken, refreshToken }
   }
-//inscription par email
-  async registerEmail(dto: RegisterEmailDto) {
-    const exists = await this.prisma.user.findUnique({ where: { email: dto.email } })
-    if (exists) throw new ConflictException('Email already in use')
 
-    const hashedPassword = await bcrypt.hash(dto.password, 10)
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        phone: '',
-        firstname: dto.firstName,
-        lastname: dto.lastName,
-        hashedPassword,
-        role: $Enums.Role.ADMIN,
-        emailVerified: false,
-      },
-    })
 
-    return {message : 'verificcation email sent to '}
-  } 
 //connection par email
   async loginEmail(dto: LoginEmailDto) {
     const dummy_hash = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8z5rZ3i.1QyY9Vn0e7aPqFhXoG' // bcrypt hash de "password"
@@ -69,12 +55,10 @@ import { randomUUID } from 'crypto';
     if (!user || !user.hashedPassword || !valid || !user.emailVerified) {
     throw new UnauthorizedException('Identifiants invalides')
   }
-  
-
-    return { token: this.signToken({ sub: user.id, role: user.role}) }
+    return this.signToken({ sub: user.id, role: user.role})
   }
 
-
+//connection par numéro de téléphone
 async loginPhone(dto: LoginPhoneDto) {
     const dummy_hash = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8z5rZ3i.1QyY9Vn0e7aPqFhXoG' // bcrypt hash de "password"
 
@@ -88,104 +72,78 @@ async loginPhone(dto: LoginPhoneDto) {
     throw new UnauthorizedException('Identifiants invalides')
   }
 
-  return { token: this.signToken({ sub: user.id, role: user.role}) }
+  return this.signToken({ sub: user.id, role: user.role})
 }  
 
-//Connexion par téléphone : vérification du code OTP et création du compte si nécessaire
+//Inscription par téléphone : envoie et vérification du code OTP premiere étape de la création du compte
   async sendPhoneOtp(dto: SendPhoneOtpDto) {
+    await this.OtpService.sendPhoneOtp(dto.phone);
 
-    //verifier si le numéro est déjà associé à un compte
+    //token temporaire qui transporte le numero jusqu'à la vérification
+    const tempToken = this.jwt.sign(
+      { phone: dto.phone, purpose: 'verify', Jti: randomUUID()},
+      { secret: process.env.JWT_SECRET, expiresIn: '15min'},
+    )
+    return { message: 'Un code de verification vous a été envoyé', token: tempToken}
+  }
 
-  const exists = await this.prisma.user.findUnique({ where: { phone: dto.phone } })
-    if (exists) {
-      await this.smsService.sendOtp(dto.phone, "Quelqu'un tente de s'inscrire avec votre numéro vybe. Si ce n'est pas vous, ignorez ce message.")
-
-      return{
-        message:"Un code de verification vous a été envoyé, si le numéro n'est pas associé à un compte vybe"
-      }
-    }
-
-  const otp = await this.generateUniqueOtp()
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // 5 min
-
-  // upsert : crée l'entrée OTP si elle n'existe pas, la remplace sinon
-  // (cas où l'utilisateur redemande un code avant expiration)
-  await this.prisma.otpVerification.upsert({
-    where: { phone: dto.phone },
-    update: { otp, expiresAt },
-    create: { phone: dto.phone, otp, expiresAt },
-  })
-
-  await this.smsService.sendOtp(dto.phone, `Votre code de verification vybe :${otp}`)
-
-  return { message: 'Un code de verification vous a été envoyé' }
-}
-
-//send OTP par email
+//Inscription par téléphone : envoie et vérification du code OTP premiere étape de la création du compte
 async sendEmailOtp(dto: SendEmailOtpDto) {
-  const exists = await this.prisma.user.findUnique({ where: { email: dto.email } })
-  if (exists) throw new ConflictException("Un code de verification vous a été envoyé, si l'email n'existe pas en base ")
+  await this.OtpService.sendEmailOtp(dto.email)
 
-  const otp = await this.generateUniqueOtp()
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // 5 min
+  const tempToken = this.jwt.sign(
+    { email: dto.email, purpose:'verify', jti: randomUUID()},
+    { secret:process.env.JWT_SECRET, expiresIn: '15min'}
+  )
+    return { message: 'Un code de verification vous a été envoyé par email', token: tempToken }
+  }
 
-  await this.prisma.otpVerification.upsert({
-    where: { email: dto.email }, // on utilise le champ "phone" pour stocker l'email dans la table OTP
-    update: { otp, expiresAt },
-    create: { phone: dto.email, otp, expiresAt },
-  })
+//verification du code OTP envoyé par téléphone, 
+// et génération d'un token temporaire pour la suite de l'inscription (endpoint "complete-profile" pour compléter le profil et créer le compte)
+async verifyPhoneOtp(dto: VerifyOtpDto, token: string) {
+  // Décoder le tempToken pour récupérer le phone
+  const payload = this.jwt.verify(token, { secret: process.env.JWT_SECRET })
+  
+  if(payload.purpose !=='verify'){
+    throw new UnauthorizedException('Token invalide')
+  }
 
-  // Simule l'envoi de l'email (await...)
-  console.log(`OTP pour ${dto.email} : ${otp}`) //📝à remplacer par envoi réel d'email
+  const phone = payload.phone;
+  await this.OtpService.verifyOtp(phone, dto.otp)
 
-  return { message: 'Code envoyé' }
+  const tempToken = this.jwt.sign(
+    { phone, verified: true, purpose: 'complete-profile', jti: randomUUID() },
+    { secret: process.env.JWT_SECRET, expiresIn: '15m' },
+  );
+
+  return { success: true, message: 'Code vérifié avec succès.', token: tempToken };
 }
 
-//verification du code OTP
-async verifyOtp(dto: VerifyOtpDto) {
-    const record = await this.prisma.otpVerification.findFirst({ where: { otp: dto.otp } })
-    if (!record || record.otp !== String(dto.otp) || record.expiresAt < new Date()) {
-      throw new BadRequestException('OTP invalide ou expiré')    
-    
+  async verifyEmailOtp(dto: VerifyEmailOtpDto, token: string) {
+    let payload: any;
+
+    try{
+      payload = this.jwt.verify(token, {secret:  process.env.JWT_SECRET})
+    } catch (error){
+      throw new UnauthorizedException('Session expirée. Veuillez recommencer .')
+    }
+    if(payload.purpose !== 'verify'){
+      throw new UnauthorizedException('Token invalide');
     }
 
-    const phone = record.phone 
+    const email = payload.email;
+    await this.OtpService.verifyOtp(email, dto.otp);
 
-    if(!record.phone) {
-      throw new BadRequestException('OTP invalide')
-    }
-  await this.prisma.otpVerification.delete({ where: { phone: record.phone } })
-
-    const tempToken = this.jwt.sign({ phone, verified:true, purpose: 'complete-profile',  jti: randomUUID()}, {secret: process.env.JWT_SECRET, expiresIn: '15m' }) 
-
-    return {success: true, message:"Code verifié avec succès.",token: tempToken}
-  }
-
-  // async verifyEmailOtp(dto: VerifyOtpDto) {
-  //   const record = await this.prisma.otpVerification.findUnique({ where: { phone: dto.otp } })
-  //   if (!record || record.otp !== String(dto.otp) || record.expiresAt < new Date()) {
-  //     throw new BadRequestException('OTP invalide ou expiré')    
-  //   }
-  // await this.prisma.otpVerification.delete({ where: { phone: dto.email } })
-
-  //   const TempToken = this.jwt.sign(
-  //     { email: dto.email, verified:true, purpose: 'complete-profile' }, 
-  //     { secret: process.env.JWT_SECRET, expiresIn: '15m' })
-
-  //     return {success: true, message:"Code verifié avec succès.", TempToken}
-  // }
+    // Recherche du code OTP dans la base de données
+  const tempToken = this.jwt.sign(
+    { email, verified: true, purpose: 'complete-profile', jti: randomUUID() },
+    { secret: process.env.JWT_SECRET, expiresIn: '15m' },
+  );
+  return { success: true, message: 'Code verifié avec succès.', token: tempToken }
+}
 
 
-  private async generateUniqueOtp(): Promise<string> {
-    let otp: string =''
-    let exists: boolean = true
-    while (exists) {
-      otp = String(randomInt(100000, 999999))
-      const found = await this.prisma.otpVerification.findFirst({ where: { otp, expiresAt: { gt: new Date()}} })
-      exists = !!found
-    }
-    return otp
-  }
+  
 
   async completeProfile(@Req() req, @Body() dto: CompleteProfileDto) {
     //Extraire et vérifier le token temporaire du header Authorization
@@ -231,9 +189,8 @@ async verifyOtp(dto: VerifyOtpDto) {
     if (payload.phone) {
       data.phone = payload.phone
       data.phoneVerified = true
-    // } else if (payload.email) {
-    //   data.email = payload.email ‼️ Pour le flux de connexion par email, on ne vérifie pas l'email via OTP, donc on ne peut pas set "emailVerified" à true ici. Il faudrait implémenter un flux de vérification d'email similaire à celui du téléphone pour pouvoir le faire.
-    //   data.emailVerified = true
+    } else if (payload.email) {
+      data.email = payload.email 
     }
 
     const [user] = await this.prisma.$transaction([
@@ -241,21 +198,14 @@ async verifyOtp(dto: VerifyOtpDto) {
       this.prisma.usedToken.create({ data: { jti: payload.jti } }), 
     ])
     
-    return { token: this.signToken({ sub: user.id, role: user.role}) }
+    return this.signToken({ sub: user.id, role: user.role})
   }
   findAll() {
+
     return `This action returns all auth`;
   }
 
   findOne(id: number) {
     return `This action returns a #${id} auth`;
-  }
-
-  update(id: number, updateAuthDto: UpdateAuthDto) {
-    return `This action updates a #${id} auth`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} auth`;
   }
 }

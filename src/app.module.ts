@@ -9,6 +9,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { OtpModule } from './otp/otp.module';
 import { SmsModule } from './sms/sms.module';
+import { MailModule } from './mail/mail.module';
 
 
 
@@ -21,6 +22,7 @@ import { SmsModule } from './sms/sms.module';
   UsersModule,
   OtpModule,
   SmsModule,
+  MailModule,
 
   ],
   controllers: [],

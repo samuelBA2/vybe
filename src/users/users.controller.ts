@@ -1,7 +1,10 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, Headers } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangeIdentifierDto } from './dto/change-identifier.dto';
+import { VerifyIdentifierDto } from './dto/verify-identifier.dto'
 
 @Controller('users')
 export class UsersController {
@@ -22,10 +25,33 @@ export class UsersController {
     return this.usersService.findOne(+id);
   }
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.usersService.update(+id, updateUserDto);
+  @UseGuards(JwtAuthGuard)
+  @Patch('me')
+  async update(@Req() req, @Body() dto: UpdateUserDto) {
+    return this.usersService.update(req.user.sub, dto);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('me/password')
+  async changePassword(@Req() req, @Body() dto: ChangePasswordDto) {
+    return this.usersService.changePassword(req.user.id, dto);
+}
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('me/identifier')
+  async requestIdentifierChange(@Req() req, @Body() dto: ChangeIdentifierDto,) {
+  return this.usersService.requestIdentifierChange(req.user.id, dto);
+}
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('me/identifier/verify')
+  async verifyIdentifierChange(@Req() req,@Body() dto: VerifyIdentifierDto,@Headers('x-temp-token') tempToken: string,  // tempToken dans le header
+) {
+  if (!tempToken) {
+    throw new BadRequestException('Token temporaire manquant.');
+  }
+  return this.usersService.verifyIdentifierChange(req.user.id, dto, tempToken);
+}
 
   @Delete(':id')
   remove(@Param('id') id: string) {

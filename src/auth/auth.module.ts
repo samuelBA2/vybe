@@ -7,11 +7,14 @@ import { JwtStrategy} from 'src/jwt.strategy';
 import { PassportModule } from '@nestjs/passport';
 import { SmsModule } from 'src/sms/sms.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { OtpModule } from 'src/otp/otp.module';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 
 @Module({
   imports : [
     PrismaModule, 
+    OtpModule,
     PassportModule,
     SmsModule,
     JwtModule.registerAsync({
@@ -24,7 +27,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     }),
   ],  
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports:[JwtModule],
+  providers: [AuthService, JwtStrategy, JwtAuthGuard],
+  exports:[JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

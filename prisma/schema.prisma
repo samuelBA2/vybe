@@ -17,6 +17,7 @@ model User {
   hashedPassword String?
   firstname  String?
   lastname   String?
+  avatarUrl  String?
   role       Role
   emailVerified Boolean @default(false)
   phoneVerified Boolean @default(false)
@@ -30,6 +31,11 @@ model User {
   orders Order[]
   
   otpVerications OtpVerification[]
+
+  profileUpdatedAt  DateTime?  // date de la dernière modification
+  profileUpdateCount Int       @default(0)  // nb de modifs ce mois-ci
+  profileUpdateMonth Int       @default(0)  // mois du compteur (1-12)
+  profileUpdateYear  Int       @default(0)  // année du compteur
 }
 
 model UsedToken {
@@ -58,11 +64,14 @@ enum Role {
 
 model OtpVerification {
   id        String   @id @default(uuid())
-  phone     String?   @unique
-  email     String?   @unique
-  otp       String
+  identifier String   // email ou téléphone
+  code       String
+  used      Boolean  @default(false)
+  attempts  Int      @default(0)
   expiresAt DateTime
   createdAt DateTime @default(now())
+  
+  //Null pour l'inscription, renseigné pour la reconnexion
   userId    String?
   user      User?    @relation(fields: [userId], references: [id])
 }
