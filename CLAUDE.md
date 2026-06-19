@@ -10,14 +10,14 @@ Vybe is a NestJS backend (TypeScript) for an event-ticketing platform: user auth
 
 ```bash
 npm run start:dev       # run with watch mode
-npm run build            # nest build
-npm run lint             # eslint --fix on src/apps/libs/test
-npm run format            # prettier --write on src/test
+npm run build           # nest build
+npm run lint            # eslint --fix on src/apps/libs/test
+npm run format          # prettier --write on src/test
 
-npm run test              # unit tests (jest, rootDir: src, matches *.spec.ts)
+npm run test            # unit tests (jest, rootDir: src, matches *.spec.ts)
 npm run test:watch
 npm run test:cov
-npm run test:e2e          # e2e tests, uses test/jest-e2e.json
+npm run test:e2e        # e2e tests, uses test/jest-e2e.json
 
 # run a single test file
 npx jest src/auth/auth.service.spec.ts
@@ -65,6 +65,13 @@ Login (`/auth/login/email`, `/auth/login/phone`) compares bcrypt hashes against 
 
 ### Identifier change flow
 `requestIdentifierChange` issues a 10-min JWT temp token encoding `{ sub: userId, newIdentifier, type: 'identifier-change' }` and sends an OTP to the new identifier; `verifyIdentifierChange` (header `x-temp-token`) validates the token + OTP, then updates `email` or `phone` on the user.
+
+### Account deletion flow (soft delete, OTP-confirmed)
+Two authenticated steps (`JwtAuthGuard`), modeled on the identifier-change flow:
+1. `DELETE /users/me` — `requestAccountDeletion` sends an account-deletion OTP to the user's own identifier (email if set, else phone) via `OtpService.sendAccountDeletion{Email,Phone}Otp` (real OTP with the same block/cooldown protections as login), and returns a 10-min JWT temp token `{ sub: userId, type: 'account-deletion' }`.
+2. `POST /users/me/delete/verify` (header `x-temp-token` + `{ otp }`) — `verifyAccountDeletion` validates the token (type + `sub` match), verifies the OTP, then **soft-deletes**: sets `User.isValid = false` and `User.deletionRequestedAt = now`. No hard delete — the row is retained for a 2-week grace period for recovery.
+
+Soft-deleted accounts (`isValid = false`) are rejected at login (`loginEmail`/`loginPhone` and the OTP-verify steps in `auth.service`). The OTP message (email HTML reuses `MailService`'s design via `sendAccountDeletionOtp`; SMS reuses the same text) warns the user the account stays stored for two weeks. Automatic purge after 14 days and a recovery endpoint are not yet implemented.
 
 ### Config
 `ConfigModule` is global. Key env vars: `DATABASE_URL`, `JWT_SECRET`, `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`, `SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`/`SENDGRID_FROM_NAME`, `PORT`.

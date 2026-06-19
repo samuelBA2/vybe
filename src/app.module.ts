@@ -11,19 +11,20 @@ import { OtpModule } from './otp/otp.module';
 import { SmsModule } from './sms/sms.module';
 import { MailModule } from './mail/mail.module';
 
-
-
 @Module({
-  imports: [ConfigModule.forRoot({isGlobal: true}),
-    AuthModule, UsersModule, PrismaModule, JwtModule.register({
-    secret: process.env.JWT_SECRET,
-    signOptions: { expiresIn: '1h' },
-  }),
-  UsersModule,
-  OtpModule,
-  SmsModule,
-  MailModule,
-
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    AuthModule,
+    UsersModule,
+    PrismaModule,
+    JwtModule.register({
+      secret: process.env.JWT_SECRET,
+      signOptions: { expiresIn: '1h' },
+    }),
+    UsersModule,
+    OtpModule,
+    SmsModule,
+    MailModule,
   ],
   controllers: [],
   providers: [],

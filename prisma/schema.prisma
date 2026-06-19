@@ -36,6 +36,11 @@ model User {
   profileUpdateCount Int       @default(0)  // nb de modifs ce mois-ci
   profileUpdateMonth Int       @default(0)  // mois du compteur (1-12)
   profileUpdateYear  Int       @default(0)  // année du compteur
+
+  // Soft delete : false pendant le délai de grâce (2 semaines) avant purge définitive.
+  // Un compte invalide ne peut plus se connecter mais reste récupérable.
+  isValid            Boolean   @default(true)
+  deletionRequestedAt DateTime? // date de la demande de suppression (point de départ des 2 semaines)
 }
 
 model UsedToken {
@@ -69,8 +74,10 @@ model OtpVerification {
   used      Boolean  @default(false)
   attempts  Int      @default(0)
   expiresAt DateTime
+  // Défini après MAX tentatives échouées, bloque pendant 20 min
+  blockedUntil DateTime?
   createdAt DateTime @default(now())
-  
+
   //Null pour l'inscription, renseigné pour la reconnexion
   userId    String?
   user      User?    @relation(fields: [userId], references: [id])

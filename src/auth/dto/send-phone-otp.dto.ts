@@ -1,6 +1,6 @@
-import { IsPhoneNumber } from 'class-validator'
+import { IsPhoneNumber } from 'class-validator';
 
 export class SendPhoneOtpDto {
-    @IsPhoneNumber()
-    phone: string
+  @IsPhoneNumber()
+  phone: string;
 }

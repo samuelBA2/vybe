@@ -1,16 +1,22 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Req,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 // import { UpdateAuthDto } from './dto/update-auth.dto';
-import { Headers } from '@nestjs/common'
+import { Headers } from '@nestjs/common';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
 import { VerifyEmailOtpDto } from './dto/verify-mail.dto';
 import { LoginPhoneDto } from './dto/login-phone.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
-import {SendEmailOtpDto } from './dto/send-mail-otp.dto'
+import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
 import { UseGuards } from '@nestjs/common';
-
 
 @Controller('auth')
 export class AuthController {
@@ -31,21 +37,42 @@ export class AuthController {
     return this.authService.loginEmail(dto);
   }
 
+  @Post('login/email/verify')
+  verifyLoginEmail(
+    @Body() dto: VerifyEmailOtpDto,
+    @Headers('authorization') auth: string,
+  ) {
+    const token = auth?.replace('Bearer ', '');
+    return this.authService.verifyLoginEmailOtp(dto, token);
+  }
+
   @Post('login/phone')
   loginPhone(@Body() dto: LoginPhoneDto) {
     return this.authService.loginPhone(dto);
   }
 
-  @Post('phone/verify')
-  verifyOtp(@Body() dto: VerifyOtpDto, @Headers('authorization') auth: string, ) {
+  @Post('login/phone/verify')
+  verifyLoginPhone(
+    @Body() dto: VerifyOtpDto,
+    @Headers('authorization') auth: string,
+  ) {
     const token = auth?.replace('Bearer ', '');
-    return this.authService.verifyPhoneOtp(dto, token)
+    return this.authService.verifyLoginPhoneOtp(dto, token);
+  }
+
+  @Post('phone/verify')
+  verifyOtp(@Body() dto: VerifyOtpDto, @Headers('authorization') auth: string) {
+    const token = auth?.replace('Bearer ', '');
+    return this.authService.verifyPhoneOtp(dto, token);
   }
 
   @Post('email/verify')
-  verifyEmailOtp(@Body() dto: VerifyEmailOtpDto, @Headers('authorization') auth: string,) {
-    const token = auth?.replace('Bearer ','');
-    return this.authService.verifyEmailOtp(dto, token)
+  verifyEmailOtp(
+    @Body() dto: VerifyEmailOtpDto,
+    @Headers('authorization') auth: string,
+  ) {
+    const token = auth?.replace('Bearer ', '');
+    return this.authService.verifyEmailOtp(dto, token);
   }
 
   @Post('complete-profile')

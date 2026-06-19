@@ -1,6 +1,6 @@
-import { IsString, Length} from 'class-validator'
+import { IsString, Length } from 'class-validator';
 export class VerifyOtpDto {
-    @IsString() 
-    @Length(6, 6) 
-    otp: string
+  @IsString()
+  @Length(6, 6)
+  otp: string;
 }
