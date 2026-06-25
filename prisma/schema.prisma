@@ -101,6 +101,7 @@ model Event {
   status        EventStatus  @default(DRAFT)
   termsAccepted Boolean      @default(false)
   createdAt     DateTime     @default(now())
+  reviewedAt    DateTime?    // date de la décision de modération (validation/refus)
 
   participants EventParticipant[] 
 
@@ -119,6 +120,7 @@ model EventMedia {
   mimeType  String
   sizeBytes Int
   mediaType MediaType
+  isPoster  Boolean   @default(false) // true pour l'affiche (exactement 1 par événement)
   createdAt DateTime  @default(now())
 }
 
@@ -142,7 +144,9 @@ enum EventCategory {
 
 enum EventStatus {
   DRAFT
+  PENDING_REVIEW
   PUBLISHED
+  REJECTED
   CLOSED
   CANCELLED
 }
@@ -155,7 +159,8 @@ model TicketCategory {
   event        Event   @relation(fields: [eventId], references: [id])
   name         String  // Standard, VIP, VVIP...
   price        Float
-  totalStock   Int     // Capacité max
+  totalStock   Int?    // null = stock illimité
+  ticketDesignUrl String // URL de l'image de design du billet
   soldCount    Int     @default(0)
   maxPerOrder  Int     @default(10) // Max billets par commande
   benefits     String?
