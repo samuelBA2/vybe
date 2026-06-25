@@ -6,6 +6,25 @@ import {
 import sgMail from '@sendgrid/mail';
 import { ConfigService } from '@nestjs/config';
 
+export interface ModerationEmailParams {
+  to: string;
+  title: string;
+  description: string;
+  startDate: Date;
+  endDate: Date;
+  location: string;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  category: string;
+  dressCode: string | null;
+  purchaseDeadline: Date;
+  creatorLabel: string;
+  posterUrl: string;
+  ticketCategories: { name: string; price: number; ticketDesignUrl: string }[];
+  approveUrl: string;
+  rejectUrl: string;
+}
+
 @Injectable()
 export class MailService {
   private logger = new Logger(MailService.name);
@@ -278,6 +297,158 @@ export class MailService {
       );
       throw new InternalServerErrorException(
         "Impossible d'envoyer le code de sécurité. Veuillez réessayer plus tard.",
+      );
+    }
+  }
+
+  async sendEventModerationEmail(params: ModerationEmailParams): Promise<void> {
+    const fmt = (d: Date) => d.toLocaleString('fr-FR');
+    const gps =
+      params.gpsLat != null && params.gpsLng != null
+        ? `${params.gpsLat}, ${params.gpsLng}`
+        : '—';
+
+    const ticketsRows = params.ticketCategories
+      .map(
+        (t) => `
+        <tr>
+          <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.name}</td>
+          <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.price} USD</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #222;">
+            <img src="${t.ticketDesignUrl}" alt="design ${t.name}" width="80" style="border-radius:6px;"/>
+          </td>
+        </tr>`,
+      )
+      .join('');
+
+    const row = (label: string, value: string) => `
+      <tr>
+        <td style="padding:8px 12px;color:#888;font-size:13px;width:160px;">${label}</td>
+        <td style="padding:8px 12px;color:#eee;font-size:14px;">${value}</td>
+      </tr>`;
+
+    const msg = {
+      to: params.to,
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL!,
+        name: process.env.SENDGRID_FROM_NAME || 'Vybe Team',
+      },
+      subject: `Nouvel événement à valider : ${params.title}`,
+      text:
+        `Nouvel événement à valider : ${params.title}\n` +
+        `Lieu : ${params.location}\nDébut : ${fmt(params.startDate)}\n` +
+        `Valider : ${params.approveUrl}\nRefuser : ${params.rejectUrl}`,
+      html: `
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#0d0d0d;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d0d0d;padding:40px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#141414;border-radius:16px;overflow:hidden;">
+        <tr><td align="center" style="background:linear-gradient(135deg,#7B2FF7,#F107A3);padding:32px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">Événement à modérer</h1>
+        </td></tr>
+        <tr><td style="padding:24px 32px;">
+          <img src="${params.posterUrl}" alt="affiche" width="536" style="width:100%;border-radius:12px;margin-bottom:24px;"/>
+          <h2 style="color:#fff;margin:0 0 16px;">${params.title}</h2>
+          <p style="color:#aaa;line-height:1.6;">${params.description}</p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;background:#1a1a1a;border-radius:10px;">
+            ${row('Début', fmt(params.startDate))}
+            ${row('Fin', fmt(params.endDate))}
+            ${row('Lieu', params.location)}
+            ${row('GPS', gps)}
+            ${row('Catégorie', params.category)}
+            ${row('Dress code', params.dressCode || '—')}
+            ${row('Limite achat', fmt(params.purchaseDeadline))}
+            ${row('Créateur', params.creatorLabel)}
+          </table>
+          <h3 style="color:#fff;margin:24px 0 8px;">Catégories de billets</h3>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:10px;">
+            <tr>
+              <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Nom</th>
+              <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Prix</th>
+              <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Design</th>
+            </tr>
+            ${ticketsRows}
+          </table>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:32px;"><tr>
+            <td align="center" style="padding:8px;">
+              <a href="${params.approveUrl}" style="display:inline-block;background:#1db954;color:#fff;text-decoration:none;padding:14px 28px;border-radius:10px;font-weight:700;">✅ Valider</a>
+            </td>
+            <td align="center" style="padding:8px;">
+              <a href="${params.rejectUrl}" style="display:inline-block;background:#e0245e;color:#fff;text-decoration:none;padding:14px 28px;border-radius:10px;font-weight:700;">❌ Refuser</a>
+            </td>
+          </tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`,
+    };
+
+    try {
+      await sgMail.send(msg);
+      this.logger.log(`Mail de modération envoyé à ${params.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'envoi du mail de modération : ${error.message}`,
+      );
+      throw new InternalServerErrorException(
+        "Impossible d'envoyer le mail de modération.",
+      );
+    }
+  }
+
+  async sendEventDecisionEmail(
+    to: string,
+    eventTitle: string,
+    approved: boolean,
+  ): Promise<void> {
+    const subject = approved
+      ? `Votre événement a été validé : ${eventTitle}`
+      : `Votre événement a été refusé : ${eventTitle}`;
+    const body = approved
+      ? `Bonne nouvelle ! Votre événement « ${eventTitle} » a été validé par l'équipe Vybe et est désormais publié.`
+      : `Votre événement « ${eventTitle} » n'a pas été retenu par l'équipe Vybe. Vous pouvez nous contacter pour plus d'informations.`;
+
+    const msg = {
+      to,
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL!,
+        name: process.env.SENDGRID_FROM_NAME || 'Vybe Team',
+      },
+      subject,
+      text: body,
+      html: `
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#0d0d0d;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d0d0d;padding:40px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#141414;border-radius:16px;overflow:hidden;">
+        <tr><td align="center" style="background:linear-gradient(135deg,#7B2FF7,#F107A3);padding:32px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">${approved ? 'Événement validé' : 'Événement refusé'}</h1>
+        </td></tr>
+        <tr><td style="padding:32px 40px;">
+          <p style="color:#ccc;font-size:15px;line-height:1.7;">${body}</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`,
+    };
+
+    try {
+      await sgMail.send(msg);
+      this.logger.log(
+        `Mail de décision (${approved ? 'validé' : 'refusé'}) envoyé à ${to}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'envoi du mail de décision : ${error.message}`,
+      );
+      throw new InternalServerErrorException(
+        "Impossible d'envoyer le mail de décision.",
       );
     }
   }
