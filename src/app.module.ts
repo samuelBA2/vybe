@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { OtpModule } from './otp/otp.module';
 import { SmsModule } from './sms/sms.module';
 import { MailModule } from './mail/mail.module';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { MailModule } from './mail/mail.module';
     OtpModule,
     SmsModule,
     MailModule,
+    EventsModule,
   ],
   controllers: [],
   providers: [],

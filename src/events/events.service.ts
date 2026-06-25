@@ -100,7 +100,7 @@ export class EventsService {
     const poster = posters[0];
 
     await this.mailService.sendEventModerationEmail({
-      to: teamEmail,
+      to: teamEmail, // à verifier, le mail de l'équipe vybe
       title: dto.title,
       description: dto.description,
       startDate: start,
