@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { MailService } from 'src/mail/mail.service';
@@ -12,6 +12,17 @@ export class EventsService {
     private readonly mailService: MailService,
     private readonly moderationService: EventModerationService,
   ) {}
+
+  async findOne(eventId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      include: { mediaFiles: true, ticketCategories: true, createdBy: { select: { id: true, email: true, firstname: true, lastname: true } } },
+    });
+    if (!event) {
+      throw new NotFoundException('Événement introuvable.');
+    }
+    return event;
+  }
 
   async createEvent(userId: string, dto: CreateEventDto) {
     const start = new Date(dto.startDate);

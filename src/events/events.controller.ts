@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Header,
+  Param,
   Post,
   Query,
   Req,
@@ -29,6 +30,11 @@ export class EventsController {
   @Post()
   async create(@Req() req, @Body() dto: CreateEventDto) {
     return this.eventsService.createEvent(req.user.sub, dto);
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    return this.eventsService.findOne(id);
   }
 
   // Lien magique du mail équipe : page de confirmation (évite la validation
