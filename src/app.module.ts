@@ -16,19 +16,22 @@ import { EventsModule } from './events/events.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     AuthModule,
-    UsersModule,
     PrismaModule,
-    JwtModule.register({
-      secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: '1h' },
-    }),
+    JwtModule.registerAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (configService: ConfigService) => ({
+    secret: configService.get<string>('JWT_SECRET'),
+    signOptions: { expiresIn: '1h' },
+  }),
+}),
     UsersModule,
     OtpModule,
     SmsModule,
     MailModule,
     EventsModule,
   ],
-  controllers: [],
-  providers: [],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}
