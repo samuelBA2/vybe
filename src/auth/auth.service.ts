@@ -115,7 +115,7 @@ export class AuthService {
     });
     if (!user || !user.isValid)
       throw new UnauthorizedException('Identifiants invalides');
-
+    
     return this.signToken({ sub: user.id, role: user.role });
   }
 

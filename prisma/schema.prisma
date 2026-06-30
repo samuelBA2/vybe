@@ -161,7 +161,7 @@ model TicketCategory {
   price        Float
   totalStock   Int?    // null = stock illimité
   ticketDesignUrl String // URL de l'image de design du billet
-  soldCount    Int     @default(0)
+  soldCount    Int     @default(0) //
   maxPerOrder  Int     @default(10) // Max billets par commande
   benefits     String?
   
@@ -172,8 +172,8 @@ model TicketCategory {
 // Commande (1 commande = N billets)
 model Order {
   id               String      @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
   ticketCategoryId String
   ticketCategory   TicketCategory @relation(fields: [ticketCategoryId], references: [id])
   quantity         Int
@@ -207,7 +207,7 @@ model Ticket {
   scannedAt        DateTime?
   scannedByAgentId String?
 
-  expiresAt         DateTime
+  expiresAt        DateTime
   pdfUrl           String?
   createdAt        DateTime  @default(now())
 
