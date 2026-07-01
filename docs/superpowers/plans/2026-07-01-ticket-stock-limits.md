@@ -17,7 +17,14 @@
   - **Chaque** catégorie doit fournir `totalStock` (entier ≥ 1).
   - **`somme(totalStock) ≤ totalCapacity`**. Si dépassement → erreur avec le message **exact** :
     `Vous avez dépassé le nombre des billets que vous avez commandé, si vous voulez un nombre plus élevé veuillez souscrire pour les billets en illimité.`
-  - La somme peut être **inférieure** à `totalCapacity` (le créateur n'est pas obligé de tout allouer).
+  - La somme peut être **inférieure** à `totalCapacity` (le créateur n'est pas obligé de tout allouer ; le reliquat = capacité déclarée non vendue). Décision : on tolère `≤`, on n'exige pas `=`.
+
+### Décisions annexes (défauts retenus, modifiables)
+
+- **Plafond 50 000** : constante nommée `MAX_TOTAL_CAPACITY = 50000` dans `EventsService`. Facile à déplacer plus tard dans une variable d'env (`MAX_TICKETS_PER_EVENT`) si le plafond doit varier — pas fait maintenant (YAGNI).
+- **Fenêtre de vente « jusqu'au jour de l'événement »** : aucun nouveau champ. Le modèle a déjà `purchaseDeadline` (≤ `startDate`). Pour vendre jusqu'au jour J, le créateur met `purchaseDeadline = startDate`. L'application effective de cette fenêtre (et la génération/multiplication du QR) relève du **flux d'achat futur**.
+- **`maxPerOrder`** : hors périmètre de ce plan (question ouverte séparée : défaut 10, éventuel `maxPerOrder ≤ totalStock`). On ne le touche pas ici.
+- **`totalCapacity` stocké** (choix « tout-ou-rien + capacité »), pas dérivé.
 
 ## Global Constraints
 
@@ -333,7 +340,10 @@ git commit -m "feat(events): validation et persistance du stock limité/illimit�
 
 ---
 
-### Task 4: Mail de modération — afficher la capacité et le stock par catégorie
+### Task 4 (OPTIONNELLE) : Mail de modération — afficher la capacité et le stock par catégorie
+
+> Ajout de confort, hors demande initiale. Peut être ignorée sans impact sur la fonctionnalité.
+
 
 **Files:**
 - Modify: `src/mail/mail.service.ts`
