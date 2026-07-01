@@ -10,7 +10,7 @@
 
 ## Requirements & règles métier (issus du brainstorming)
 
-- **Choix au niveau de l'événement** (pas par catégorie) : `unlimitedStock: boolean` (le radio « illimité »).
+- **Choix au niveau de l'événement** (pas par catégorie) : `unlimitedStock?: boolean` (la case « illimité »). **Non coché / absent / `false` → limité** ; seul `true` → illimité. Le champ est donc **optionnel** (défaut = limité).
 - **Flux illimité** (`unlimitedStock = true`) : toutes les catégories sont illimitées. En base : `Event.totalCapacity = null` et chaque `TicketCategory.totalStock = null`. (La multiplication du QR unique par billet jusqu'au jour de l'événement relève du **flux d'achat futur**, non couvert ici.)
 - **Flux limité** (`unlimitedStock = false`) :
   - `totalCapacity` **requis**, entier, **1 ≤ totalCapacity ≤ 50 000** (`MAX_TOTAL_CAPACITY = 50000` ; 50 000 est autorisé).
@@ -117,9 +117,11 @@ import {
 Dans `src/events/dto/create-event.dto.ts`, juste avant le champ `media` (la ligne `@IsArray()` qui précède `media: MediaItemDto[];`), insérer :
 
 ```typescript
-  // Choix au niveau de l'événement : true = billets illimités pour toutes les catégories.
+  // Case « illimité » au niveau de l'événement. Non cochée / absente / false = limité ;
+  // seul true = illimité pour toutes les catégories.
+  @IsOptional()
   @IsBoolean()
-  unlimitedStock: boolean;
+  unlimitedStock?: boolean;
 
   // Requis uniquement en stock limité (unlimitedStock = false). Borné à 50 000 côté service.
   @IsOptional()
