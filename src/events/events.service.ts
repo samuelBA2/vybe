@@ -158,10 +158,12 @@ export class EventsService {
       purchaseDeadline: deadline,
       creatorLabel: event.createdBy?.email ?? userId,
       posterUrl: poster.url,
+      totalCapacity: eventCapacity,
       ticketCategories: dto.ticketCategories.map((t) => ({
         name: t.name,
         price: t.price,
         ticketDesignUrl: t.ticketDesignUrl,
+        totalStock: dto.unlimitedStock === true ? null : (t.totalStock ?? null),
       })),
       approveUrl,
       rejectUrl,

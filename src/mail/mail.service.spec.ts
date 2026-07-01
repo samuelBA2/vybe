@@ -33,8 +33,14 @@ describe('MailService — événements', () => {
       purchaseDeadline: new Date('2030-01-01T18:00:00Z'),
       creatorLabel: 'user-123',
       posterUrl: 'https://cdn/affiche.png',
+      totalCapacity: 50000,
       ticketCategories: [
-        { name: 'VIP', price: 100, ticketDesignUrl: 'https://cdn/vip.png' },
+        {
+          name: 'VIP',
+          price: 100,
+          ticketDesignUrl: 'https://cdn/vip.png',
+          totalStock: 500,
+        },
       ],
       approveUrl: 'https://api/events/moderate?token=t&decision=approve',
       rejectUrl: 'https://api/events/moderate?token=t&decision=reject',
@@ -48,6 +54,8 @@ describe('MailService — événements', () => {
     expect(msg.html).toContain('decision=approve');
     expect(msg.html).toContain('decision=reject');
     expect(msg.html).toContain('VIP');
+    expect(msg.html).toContain('50000');
+    expect(msg.html).toContain('500');
   });
 
   it('sendEventDecisionEmail (validé) mentionne la validation', async () => {
