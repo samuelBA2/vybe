@@ -21,7 +21,7 @@
 
 ### Décisions annexes (défauts retenus, modifiables)
 
-- **Plafond 50 000** : constante nommée `MAX_TOTAL_CAPACITY = 50000` dans `EventsService`. Facile à déplacer plus tard dans une variable d'env (`MAX_TICKETS_PER_EVENT`) si le plafond doit varier — pas fait maintenant (YAGNI).
+- **Plafond 50 000 = limite globale de l'application** (le maximum de billets qu'un événement peut déclarer en mode limité, quelle que soit la salle). Constante nommée `MAX_TOTAL_CAPACITY = 50000` dans `EventsService`. Comme c'est un réglage applicatif, il pourra être déplacé dans une variable d'env (`MAX_TICKETS_PER_EVENT`) le jour où on veut le changer sans redéployer — pas fait maintenant (YAGNI).
 - **Fenêtre de vente « jusqu'au jour de l'événement »** : aucun nouveau champ. Le modèle a déjà `purchaseDeadline` (≤ `startDate`). Pour vendre jusqu'au jour J, le créateur met `purchaseDeadline = startDate`. L'application effective de cette fenêtre (et la génération/multiplication du QR) relève du **flux d'achat futur**.
 - **`maxPerOrder`** : hors périmètre de ce plan (question ouverte séparée : défaut 10, éventuel `maxPerOrder ≤ totalStock`). On ne le touche pas ici.
 - **`totalCapacity` stocké** (choix « tout-ou-rien + capacité »), pas dérivé.
