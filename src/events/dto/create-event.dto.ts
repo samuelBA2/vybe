@@ -4,12 +4,15 @@ import {
   ArrayMinSize,
   Equals,
   IsArray,
+  IsBoolean,
   IsEnum,
+  IsInt,
   IsISO8601,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { $Enums } from '@prisma/client';
@@ -56,6 +59,18 @@ export class CreateEventDto {
   // Doit valoir explicitement true (l'utilisateur accepte les conditions).
   @Equals(true)
   termsAccepted: boolean;
+
+  // Case « illimité » au niveau de l'événement. Non cochée / absente / false = limité ;
+  // seul true = illimité pour toutes les catégories.
+  @IsOptional()
+  @IsBoolean()
+  unlimitedStock?: boolean;
+
+  // Requis uniquement en stock limité (unlimitedStock ≠ true). Borné à 50 000 côté service.
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  totalCapacity?: number;
 
   @IsArray()
   @ArrayMinSize(1)
