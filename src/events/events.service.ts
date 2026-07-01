@@ -5,6 +5,9 @@ import { MailService } from 'src/mail/mail.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 
+// Limite globale de l'application : nombre maximum de billets pour un événement en mode limité.
+const MAX_TOTAL_CAPACITY = 50000;
+
 @Injectable()
 export class EventsService {
   constructor(
@@ -60,6 +63,36 @@ export class EventsService {
       );
     }
 
+    // ── Stock : billetterie illimitée (case cochée) ou limitée (par défaut) ──
+    let eventCapacity: number | null = null;
+    if (dto.unlimitedStock !== true) {
+      if (dto.totalCapacity == null) {
+        throw new BadRequestException(
+          'En stock limité, vous devez indiquer le nombre total de billets.',
+        );
+      }
+      if (dto.totalCapacity < 1 || dto.totalCapacity > MAX_TOTAL_CAPACITY) {
+        throw new BadRequestException(
+          `Le nombre total de billets doit être compris entre 1 et ${MAX_TOTAL_CAPACITY}.`,
+        );
+      }
+      let sum = 0;
+      for (const t of dto.ticketCategories) {
+        if (t.totalStock == null) {
+          throw new BadRequestException(
+            `En stock limité, la catégorie « ${t.name} » doit indiquer son nombre de billets.`,
+          );
+        }
+        sum += t.totalStock;
+      }
+      if (sum > dto.totalCapacity) {
+        throw new BadRequestException(
+          'Vous avez dépassé le nombre des billets que vous avez commandé, si vous voulez un nombre plus élevé veuillez souscrire pour les billets en illimité.',
+        );
+      }
+      eventCapacity = dto.totalCapacity;
+    }
+
     // ── Création transactionnelle (Event + médias + catégories) ──────
     const event = await this.prisma.event.create({
       data: {
@@ -75,6 +108,7 @@ export class EventsService {
         category: dto.category,
         termsAccepted: true,
         status: $Enums.EventStatus.PENDING_REVIEW,
+        totalCapacity: eventCapacity,
         createdById: userId,
         mediaFiles: {
           create: dto.media.map((m) => ({
@@ -92,7 +126,7 @@ export class EventsService {
             name: t.name,
             price: t.price,
             ticketDesignUrl: t.ticketDesignUrl,
-            totalStock: null, // stock illimité
+            totalStock: dto.unlimitedStock === true ? null : (t.totalStock ?? null),
             maxPerOrder: t.maxPerOrder ?? 10,
             benefits: t.benefits ?? null,
           })),
