@@ -20,7 +20,13 @@ export interface ModerationEmailParams {
   purchaseDeadline: Date;
   creatorLabel: string;
   posterUrl: string;
-  ticketCategories: { name: string; price: number; ticketDesignUrl: string }[];
+  totalCapacity: number | null;
+  ticketCategories: {
+    name: string;
+    price: number;
+    ticketDesignUrl: string;
+    totalStock: number | null;
+  }[];
   approveUrl: string;
   rejectUrl: string;
 }
@@ -314,6 +320,7 @@ export class MailService {
         <tr>
           <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.name}</td>
           <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.price} USD</td>
+          <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.totalStock == null ? 'Illimité' : t.totalStock}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #222;">
             <img src="${t.ticketDesignUrl}" alt="design ${t.name}" width="80" style="border-radius:6px;"/>
           </td>
@@ -360,6 +367,7 @@ export class MailService {
             ${row('Catégorie', params.category)}
             ${row('Dress code', params.dressCode || '—')}
             ${row('Limite achat', fmt(params.purchaseDeadline))}
+            ${row('Billetterie', params.totalCapacity == null ? 'Illimitée' : `Limitée — ${params.totalCapacity} billets`)}
             ${row('Créateur', params.creatorLabel)}
           </table>
           <h3 style="color:#fff;margin:24px 0 8px;">Catégories de billets</h3>
@@ -367,6 +375,7 @@ export class MailService {
             <tr>
               <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Nom</th>
               <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Prix</th>
+              <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Stock</th>
               <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Design</th>
             </tr>
             ${ticketsRows}

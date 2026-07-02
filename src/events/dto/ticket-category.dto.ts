@@ -20,6 +20,12 @@ export class TicketCategoryDto {
   @IsNotEmpty()
   ticketDesignUrl: string;
 
+  // Requis uniquement en stock limité : allocation de billets pour cette catégorie.
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  totalStock?: number;
+
   @IsOptional()
   @IsInt()
   @Min(1)

@@ -102,6 +102,7 @@ model Event {
   termsAccepted Boolean      @default(false)
   createdAt     DateTime     @default(now())
   reviewedAt    DateTime?    // date de la décision de modération (validation/refus)
+  totalCapacity Int?         // null = billetterie illimitée ; sinon capacité totale (max 50000)
 
   participants EventParticipant[] 
 

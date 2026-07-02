@@ -5,6 +5,9 @@ import { MailService } from 'src/mail/mail.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 
+// Limite globale de l'application : nombre maximum de billets pour un événement en mode limité.
+const MAX_TOTAL_CAPACITY = 50000;
+
 @Injectable()
 export class EventsService {
   constructor(
@@ -60,6 +63,43 @@ export class EventsService {
       );
     }
 
+    // ── Stock : billetterie illimitée (case cochée) ou limitée (par défaut) ──
+    // eventCapacity = capacité totale de l'événement : null en illimité, sinon le nombre choisi.
+    let eventCapacity: number | null = null;
+    // Seul unlimitedStock === true = illimité. Absent ou false = limité → on valide la jauge.
+    if (dto.unlimitedStock !== true) {
+      // 1) En mode limité, la capacité totale est obligatoire.
+      if (dto.totalCapacity == null) {
+        throw new BadRequestException(
+          'En stock limité, vous devez indiquer le nombre total de billets.',
+        );
+      }
+      // 2) La capacité doit rester dans les bornes de l'application (1 à 50 000).
+      if (dto.totalCapacity < 1 || dto.totalCapacity > MAX_TOTAL_CAPACITY) {
+        throw new BadRequestException(
+          `Le nombre total de billets doit être compris entre 1 et ${MAX_TOTAL_CAPACITY}.`,
+        );
+      }
+      // 3) Chaque catégorie doit déclarer son allocation, et on cumule pour comparer à la jauge.
+      let sum = 0;
+      for (const t of dto.ticketCategories) {
+        if (t.totalStock == null) {
+          throw new BadRequestException(
+            `En stock limité, la catégorie « ${t.name} » doit indiquer son nombre de billets.`,
+          );
+        }
+        sum += t.totalStock;
+      }
+      // 4) La somme des catégories ne peut pas dépasser la capacité totale annoncée.
+      if (sum > dto.totalCapacity) {
+        throw new BadRequestException(
+          'Vous avez dépassé le nombre des billets que vous avez commandé, si vous voulez un nombre plus élevé veuillez souscrire pour les billets en illimité.',
+        );
+      }
+      // Tout est valide : on retient la capacité à persister sur l'événement.
+      eventCapacity = dto.totalCapacity;
+    }
+
     // ── Création transactionnelle (Event + médias + catégories) ──────
     const event = await this.prisma.event.create({
       data: {
@@ -75,6 +115,7 @@ export class EventsService {
         category: dto.category,
         termsAccepted: true,
         status: $Enums.EventStatus.PENDING_REVIEW,
+        totalCapacity: eventCapacity, // null = billetterie illimitée ; sinon la jauge choisie
         createdById: userId,
         mediaFiles: {
           create: dto.media.map((m) => ({
@@ -92,7 +133,8 @@ export class EventsService {
             name: t.name,
             price: t.price,
             ticketDesignUrl: t.ticketDesignUrl,
-            totalStock: null, // stock illimité
+            // Illimité → null ; limité → l'allocation de la catégorie (déjà validée ci-dessus)
+            totalStock: dto.unlimitedStock === true ? null : (t.totalStock ?? null),
             maxPerOrder: t.maxPerOrder ?? 10,
             benefits: t.benefits ?? null,
           })),
@@ -124,10 +166,12 @@ export class EventsService {
       purchaseDeadline: deadline,
       creatorLabel: event.createdBy?.email ?? userId,
       posterUrl: poster.url,
+      totalCapacity: eventCapacity,
       ticketCategories: dto.ticketCategories.map((t) => ({
         name: t.name,
         price: t.price,
         ticketDesignUrl: t.ticketDesignUrl,
+        totalStock: dto.unlimitedStock === true ? null : (t.totalStock ?? null),
       })),
       approveUrl,
       rejectUrl,
