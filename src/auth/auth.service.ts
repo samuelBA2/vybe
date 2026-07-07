@@ -282,6 +282,7 @@ export class AuthService {
       data.phoneVerified = true;
     } else if (payload.email) {
       data.email = payload.email;
+      data.emailVerified = true;
     }
 
     const [user] = await this.prisma.$transaction([
@@ -291,6 +292,32 @@ export class AuthService {
 
     return this.signToken({ sub: user.id, role: user.role });
   }
+  // Renouvellement de session : vérifie le refresh token (cookie httpOnly)
+  // et ré-émet une paire access/refresh si l'utilisateur est toujours valide.
+  async refresh(refreshToken: string) {
+    let payload: any;
+    try {
+      payload = this.jwt.verify(refreshToken, {
+        secret: process.env.JWT_SECRET,
+      });
+    } catch {
+      throw new UnauthorizedException('Session expirée. Reconnectez-vous.');
+    }
+
+    if (payload.type !== 'refresh' || !payload.sub) {
+      throw new UnauthorizedException('Token invalide.');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+    });
+    if (!user || !user.isValid) {
+      throw new UnauthorizedException('Session expirée. Reconnectez-vous.');
+    }
+
+    return this.signToken({ sub: user.id, role: user.role });
+  }
+
   findAll() {
     return `This action returns all auth`;
   }
