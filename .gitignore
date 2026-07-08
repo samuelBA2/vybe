@@ -60,3 +60,7 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Sauvegardes locales de .env (ne jamais committer)
 .env.bak
 *.bak
+
+# Dumps de base de données (jamais committer — données + potentiels secrets)
+backup_*.sql
+*.dump

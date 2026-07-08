@@ -64,8 +64,8 @@ model EventParticipant {
 }
 
 enum Role {
-  ADMIN
-  AGENT
+  USER   // tout inscrit : self-service (créer événements/agents, encaisser)
+  AGENT  // agent de sécurité : scan des QR codes uniquement
 }
 
 model OtpVerification {

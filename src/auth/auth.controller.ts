@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 // import { UpdateAuthDto } from './dto/update-auth.dto';
 import { Headers } from '@nestjs/common';
@@ -40,21 +41,27 @@ function setRefreshCookie(res: Response, refreshToken: string) {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // Envoi d'OTP (email/SMS) : limite serrée pour bloquer le bombing et les coûts SendGrid/Twilio.
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @Post('email/send')
   registerEmail(@Body() dto: SendEmailOtpDto) {
     return this.authService.sendEmailOtp(dto);
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @Post('phone/send')
   sendPhoneOtp(@Body() dto: SendPhoneOtpDto) {
     return this.authService.sendPhoneOtp(dto);
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @Post('login/email')
   loginEmail(@Body() dto: LoginEmailDto) {
     return this.authService.loginEmail(dto);
   }
 
+  // Vérification d'OTP : limite le brute force du code à 6 chiffres (en plus du compteur en base).
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('login/email/verify')
   async verifyLoginEmail(
     @Body() dto: VerifyEmailOtpDto,
@@ -67,11 +74,13 @@ export class AuthController {
     return tokens;
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @Post('login/phone')
   loginPhone(@Body() dto: LoginPhoneDto) {
     return this.authService.loginPhone(dto);
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('login/phone/verify')
   async verifyLoginPhone(
     @Body() dto: VerifyOtpDto,
@@ -84,12 +93,14 @@ export class AuthController {
     return tokens;
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('phone/verify')
   verifyOtp(@Body() dto: VerifyOtpDto, @Headers('authorization') auth: string) {
     const token = auth?.replace('Bearer ', '');
     return this.authService.verifyPhoneOtp(dto, token);
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('email/verify')
   verifyEmailOtp(
     @Body() dto: VerifyEmailOtpDto,
@@ -128,15 +139,5 @@ export class AuthController {
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie(REFRESH_COOKIE, { path: '/auth' });
     return { message: 'Déconnecté.' };
-  }
-
-  @Get()
-  findAll() {
-    return this.authService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.authService.findOne(+id);
   }
 }

@@ -34,7 +34,7 @@ export class AuthService {
     private readonly OtpService: OtpService,
   ) {}
 
-  // Method to sign JWT tokens partagés (access + refresh)
+  // Method to sign JWT tokens partagés (access + refresh)(l'utilisateur se connecte directement à l'inscription)
   private signToken(payload: { sub: string; role: string }) {
     const secret = this.config.get<string>('JWT_SECRET');
 
@@ -42,7 +42,10 @@ export class AuthService {
       throw new Error('JWT secret not configured');
     }
 
-    const accessToken = this.jwt.sign(payload, { secret, expiresIn: '30m' });
+    const accessToken = this.jwt.sign(
+      { ...payload, type: 'access' },
+      { secret, expiresIn: '30m' },
+    );
     const refreshToken = this.jwt.sign(
       { ...payload, type: 'refresh' },
       { secret, expiresIn: '30d' },
@@ -53,16 +56,19 @@ export class AuthService {
 
   //connexion par email : envoie un OTP si le compte existe
   async loginEmail(dto: LoginEmailDto) {
+
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
 
-    if (!user || !user.emailVerified || !user.isValid) {
-      throw new UnauthorizedException('Identifiants invalides');
+
+    if (user && user.emailVerified && user.isValid) {
+      try {
+        await this.OtpService.sendLoginEmailOtp(dto.email);
+      } catch {
+        // On n'expose pas l'état interne (cooldown/blocage) : réponse uniforme.
+      }
     }
-
-    await this.OtpService.sendLoginEmailOtp(dto.email);
-
     const tempToken = this.jwt.sign(
       { email: dto.email, purpose: 'login-verify', jti: randomUUID() },
       { secret: process.env.JWT_SECRET, expiresIn: '10m' },
@@ -79,11 +85,13 @@ export class AuthService {
       where: { phone: dto.phone },
     });
 
-    if (!user || !user.phoneVerified || !user.isValid) {
-      throw new UnauthorizedException('Identifiants invalides');
+    if (user && user.phoneVerified && user.isValid) {
+      try {
+        await this.OtpService.sendLoginPhoneOtp(dto.phone);
+      } catch {
+        // On n'expose pas l'état interne (cooldown/blocage) : réponse uniforme.
+      }
     }
-
-    await this.OtpService.sendLoginPhoneOtp(dto.phone);
 
     const tempToken = this.jwt.sign(
       { phone: dto.phone, purpose: 'login-verify', jti: randomUUID() },
@@ -274,7 +282,7 @@ export class AuthService {
       firstname: dto.firstName,
       lastname: dto.lastName,
       hashedPassword: hash,
-      role: $Enums.Role.ADMIN,
+      role: $Enums.Role.USER,
     };
 
     if (payload.phone) {
@@ -297,17 +305,14 @@ export class AuthService {
   async refresh(refreshToken: string) {
     let payload: any;
     try {
-      payload = this.jwt.verify(refreshToken, {
-        secret: process.env.JWT_SECRET,
-      });
+      payload = this.jwt.verify(refreshToken, {secret: process.env.JWT_SECRET,});
     } catch {
       throw new UnauthorizedException('Session expirée. Reconnectez-vous.');
     }
 
     if (payload.type !== 'refresh' || !payload.sub) {
       throw new UnauthorizedException('Token invalide.');
-    }
-
+    }  
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
     });

@@ -17,6 +17,22 @@ import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ModerateDto } from './dto/moderate.dto';
 
+// Échappe les caractères spéciaux HTML : toute valeur non fiable (query string,
+// saisie utilisateur) DOIT passer par cette fonction avant d'être insérée dans du HTML.
+function escapeHtml(value = ''): string {
+  return value.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[c]!,
+  );
+}
+
 @Controller('events')
 export class EventsController {
   constructor(
@@ -24,9 +40,9 @@ export class EventsController {
     private readonly moderationService: EventModerationService,
   ) {}
 
-  // Création réservée aux ADMIN (tous les comptes Vybe le sont aujourd'hui).
+  // Création réservée aux organisateurs (rôle USER) ; les agents de sécurité en sont exclus.
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles('USER')
   @Post()
   async create(@Req() req, @Body() dto: CreateEventDto) {
     return this.eventsService.createEvent(req.user.sub, dto);
@@ -63,7 +79,7 @@ export class EventsController {
   <h1>Confirmer : ${label}</h1>
   <p>Confirmez votre décision de modération pour cet événement.</p>
   <form method="POST" action="/events/moderate">
-    <input type="hidden" name="token" value="${token ?? ''}"/>
+    <input type="hidden" name="token" value="${escapeHtml(token)}"/>
     <input type="hidden" name="decision" value="${safeDecision}"/>
     <button type="submit" style="padding:14px 28px;border:none;border-radius:10px;font-weight:700;cursor:pointer;background:${safeDecision === 'approve' ? '#1db954' : '#e0245e'};color:#fff;">
       Confirmer : ${label}

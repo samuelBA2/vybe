@@ -256,16 +256,27 @@ export class UsersService {
       );
     }
 
-    //nouvel identifiant déjà pris par un autre compte
+    // Le canal est déterminé par le DTO : newEmail => email, newPhone => téléphone.
+    const isEmailChange = Boolean(dto.newEmail);
     const newIdentifier = (dto.newEmail ?? dto.newPhone) as string;
 
+    // Nouvel identifiant déjà pris par un autre compte -> refus (message générique).
     const alreadyExists = await this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: newIdentifier }, { phone: newIdentifier }],
-      },
+      where: isEmailChange
+        ? { email: newIdentifier }
+        : { phone: newIdentifier },
     });
     if (alreadyExists) {
-      await this.otpService.sendPhoneOtp(newIdentifier);
+      throw new BadRequestException(
+        "Cet identifiant n'est pas disponible, veuillez en choisir un autre.",
+      );
+    }
+
+    // Envoi de l'OTP sur le bon canal : email -> mail, téléphone -> SMS.
+    if (isEmailChange) {
+      await this.otpService.sendLoginEmailOtp(newIdentifier);
+    } else {
+      await this.otpService.sendLoginPhoneOtp(newIdentifier);
     }
 
     //generer le temptoken
@@ -299,14 +310,14 @@ export class UsersService {
       throw new UnauthorizedException('Token invalide ou expiré.');
     }
 
+    // vérifier si c'est bien un token de changement d'identifiant
+    if (payload.type !== 'identifier-change') {
+      throw new ForbiddenException('Type de token non autorisé.');
+    }
+
     //le token appartient à l'utilisateur
     if (payload.sub !== userId) {
       throw new ForbiddenException('Token non autorisé.');
-    }
-
-    // verifier si c'est bien un token de changement d'identifiant
-    if (payload.sub !== userId) {
-      throw new ForbiddenException('Type de token non autorisé.');
     }
 
     //verifier l'otp (lève une exception si le code est invalide ou expiré)

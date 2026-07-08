@@ -20,23 +20,23 @@ describe('RolesGuard', () => {
 
   it('autorise quand aucun rôle requis', () => {
     const guard = makeGuard(undefined);
-    expect(guard.canActivate(makeContext({ role: 'ADMIN' }))).toBe(true);
+    expect(guard.canActivate(makeContext({ role: 'USER' }))).toBe(true);
   });
 
   it('autorise un utilisateur ayant le bon rôle', () => {
-    const guard = makeGuard(['ADMIN']);
-    expect(guard.canActivate(makeContext({ role: 'ADMIN' }))).toBe(true);
+    const guard = makeGuard(['USER']);
+    expect(guard.canActivate(makeContext({ role: 'USER' }))).toBe(true);
   });
 
   it('refuse un utilisateur sans le bon rôle', () => {
-    const guard = makeGuard(['ADMIN']);
+    const guard = makeGuard(['USER']);
     expect(() => guard.canActivate(makeContext({ role: 'AGENT' }))).toThrow(
       ForbiddenException,
     );
   });
 
   it('refuse quand il n’y a pas d’utilisateur', () => {
-    const guard = makeGuard(['ADMIN']);
+    const guard = makeGuard(['USER']);
     expect(() => guard.canActivate(makeContext(undefined))).toThrow(
       ForbiddenException,
     );

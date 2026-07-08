@@ -12,7 +12,7 @@ describe('EventsController', () => {
   });
 
   it('create délègue à EventsService avec req.user.sub', async () => {
-    const req = { user: { sub: 'user-1', role: 'ADMIN' } };
+    const req = { user: { sub: 'user-1', role: 'USER' } };
     await controller.create(req as any, { title: 'x' } as any);
     expect(events.createEvent).toHaveBeenCalledWith('user-1', { title: 'x' });
   });
