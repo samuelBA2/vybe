@@ -16,6 +16,26 @@ export class EventsService {
     private readonly moderationService: EventModerationService,
   ) {}
 
+  // Liste publique : uniquement les événements validés par la modération,
+  // triés par date de début, avec médias et catégories de billets.
+  async findPublished() {
+    return this.prisma.event.findMany({
+      where: { status: $Enums.EventStatus.PUBLISHED },
+      orderBy: { startDate: 'asc' },
+      include: { mediaFiles: true, ticketCategories: true },
+    });
+  }
+
+  // Événements de l'organisateur connecté, tous statuts confondus
+  // (il doit voir ses événements en attente de modération).
+  async findMine(userId: string) {
+    return this.prisma.event.findMany({
+      where: { createdById: userId },
+      orderBy: { createdAt: 'desc' },
+      include: { mediaFiles: true, ticketCategories: true },
+    });
+  }
+
   async findOne(eventId: string) {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
@@ -31,11 +51,11 @@ export class EventsService {
     const start = new Date(dto.startDate);
     const end = new Date(dto.endDate);
     const deadline = new Date(dto.purchaseDeadline);
-    const now = new Date();
+    const now = new Date(); 
 
     // ── Règles métier ───────────────────────────────────────────────
     if (start.getTime() <= now.getTime()) {
-      throw new BadRequestException('La date de début doit être dans le futur.');
+      throw new BadRequestException('La date de début de votre evenement doit être dans le futur.');
     }
     if (end.getTime() <= start.getTime()) {
       throw new BadRequestException(

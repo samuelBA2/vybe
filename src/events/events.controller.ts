@@ -32,9 +32,19 @@ export class EventsController {
     return this.eventsService.createEvent(req.user.sub, dto);
   }
 
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.eventsService.findOne(id);
+  // Liste publique des événements publiés — consommée par le frontend.
+  @Get()
+  async findPublished() {
+    return this.eventsService.findPublished();
+  }
+
+  // Événements créés par l'utilisateur connecté (onglet « Mes Événements »).
+  // NB : routes statiques ('mine', 'moderate') déclarées AVANT ':id',
+  // sinon Nest les fait capturer par le paramètre dynamique.
+  @UseGuards(JwtAuthGuard)
+  @Get('mine')
+  async findMine(@Req() req) {
+    return this.eventsService.findMine(req.user.sub);
   }
 
   // Lien magique du mail équipe : page de confirmation (évite la validation
@@ -65,5 +75,11 @@ export class EventsController {
   @Post('moderate')
   async moderatePost(@Body() dto: ModerateDto) {
     return this.moderationService.moderate(dto.token, dto.decision);
+  }
+
+  // Détail d'un événement — APRÈS les routes statiques ci-dessus.
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    return this.eventsService.findOne(id);
   }
 }

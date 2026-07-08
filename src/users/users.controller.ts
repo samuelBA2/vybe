@@ -33,6 +33,14 @@ export class UsersController {
     return this.usersService.findAll();
   }
 
+  // Profil de l'utilisateur connecté — utilisé par le frontend pour
+  // l'hydratation de session. Déclaré AVANT ':id' pour ne pas être capturé.
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  me(@Req() req) {
+    return this.usersService.findMe(req.user.sub);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.usersService.findOne(+id);

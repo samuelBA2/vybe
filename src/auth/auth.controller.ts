@@ -5,7 +5,10 @@ import {
   Body,
   Param,
   Req,
+  Res,
+  UnauthorizedException,
 } from '@nestjs/common';
+import type { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 // import { UpdateAuthDto } from './dto/update-auth.dto';
 import { Headers } from '@nestjs/common';
@@ -16,7 +19,22 @@ import { VerifyEmailOtpDto } from './dto/verify-mail.dto';
 import { LoginPhoneDto } from './dto/login-phone.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
 import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
-import { UseGuards } from '@nestjs/common';
+
+// Nom du cookie httpOnly qui transporte le refresh token.
+// path restreint à /auth : le cookie n'est envoyé que sur les routes d'auth.
+const REFRESH_COOKIE = 'vybe_refresh';
+const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours (aligné sur le JWT)
+
+function setRefreshCookie(res: Response, refreshToken: string) {
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie(REFRESH_COOKIE, refreshToken, {
+    httpOnly: true,
+    secure: isProd, // en prod (HTTPS) uniquement ; SameSite=None exige secure
+    sameSite: isProd ? 'none' : 'lax', // front et API sur des domaines différents en prod
+    path: '/auth',
+    maxAge: REFRESH_MAX_AGE_MS,
+  });
+}
 
 @Controller('auth')
 export class AuthController {
@@ -38,12 +56,15 @@ export class AuthController {
   }
 
   @Post('login/email/verify')
-  verifyLoginEmail(
+  async verifyLoginEmail(
     @Body() dto: VerifyEmailOtpDto,
     @Headers('authorization') auth: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const token = auth?.replace('Bearer ', '');
-    return this.authService.verifyLoginEmailOtp(dto, token);
+    const tokens = await this.authService.verifyLoginEmailOtp(dto, token);
+    setRefreshCookie(res, tokens.refreshToken);
+    return tokens;
   }
 
   @Post('login/phone')
@@ -52,12 +73,15 @@ export class AuthController {
   }
 
   @Post('login/phone/verify')
-  verifyLoginPhone(
+  async verifyLoginPhone(
     @Body() dto: VerifyOtpDto,
     @Headers('authorization') auth: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const token = auth?.replace('Bearer ', '');
-    return this.authService.verifyLoginPhoneOtp(dto, token);
+    const tokens = await this.authService.verifyLoginPhoneOtp(dto, token);
+    setRefreshCookie(res, tokens.refreshToken);
+    return tokens;
   }
 
   @Post('phone/verify')
@@ -76,15 +100,35 @@ export class AuthController {
   }
 
   @Post('complete-profile')
-  completeProfile(@Req() req, @Body() dto: CompleteProfileDto) {
-    return this.authService.completeProfile(req, dto);
+  async completeProfile(
+    @Req() req,
+    @Body() dto: CompleteProfileDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const tokens = await this.authService.completeProfile(req, dto);
+    setRefreshCookie(res, tokens.refreshToken);
+    return tokens;
   }
 
-  // @Post()
-  // @UseGuards(JwtAuthGuard)
-  // logout() {
-  //   return this.authService.logout();
-  // }
+  // Renouvelle l'access token à partir du cookie httpOnly (rotation du refresh).
+  // Le frontend appelle cet endpoint au chargement (hydratation de session)
+  // et automatiquement sur 401.
+  @Post('refresh')
+  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const refreshToken = req.cookies?.[REFRESH_COOKIE];
+    if (!refreshToken) {
+      throw new UnauthorizedException('Aucune session.');
+    }
+    const tokens = await this.authService.refresh(refreshToken);
+    setRefreshCookie(res, tokens.refreshToken);
+    return { accessToken: tokens.accessToken };
+  }
+
+  @Post('logout')
+  logout(@Res({ passthrough: true }) res: Response) {
+    res.clearCookie(REFRESH_COOKIE, { path: '/auth' });
+    return { message: 'Déconnecté.' };
+  }
 
   @Get()
   findAll() {

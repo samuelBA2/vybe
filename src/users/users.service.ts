@@ -45,6 +45,30 @@ export class UsersService {
     return `This action returns all users`;
   }
 
+  // Profil de l'utilisateur connecté (champs publics uniquement —
+  // jamais le hashedPassword ni les compteurs internes).
+  async findMe(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        firstname: true,
+        lastname: true,
+        avatarUrl: true,
+        role: true,
+        emailVerified: true,
+        phoneVerified: true,
+        createdAt: true,
+      },
+    });
+    if (!user) {
+      throw new NotFoundException('Utilisateur introuvable.');
+    }
+    return user;
+  }
+
   findOne(id: number) {
     return `This action returns a #${id} user`;
   }
