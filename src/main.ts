@@ -1,10 +1,16 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Render/Neon sont derrière un reverse-proxy : on fait confiance au premier
+  // proxy pour lire la vraie IP client (X-Forwarded-For). Indispensable pour que
+  // le rate limiting (ThrottlerGuard) compte par IP réelle et non par IP du proxy.
+  app.set('trust proxy', 1);
 
   // CORS : indispensable pour que le frontend (autre origine) puisse appeler l'API.
   // credentials: true → autorise le cookie httpOnly de refresh.
