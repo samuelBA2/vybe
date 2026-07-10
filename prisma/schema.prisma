@@ -82,6 +82,12 @@ model OtpVerification {
   //Null pour l'inscription, renseigné pour la reconnexion
   userId    String?
   user      User?    @relation(fields: [userId], references: [id])
+
+  // Index sur le champ de filtre principal des requêtes OTP (verify, block,
+  // cooldown, persist). Composite [identifier, used] : sert aussi les requêtes
+  // filtrant uniquement sur identifier (préfixe gauche). Évite le full table scan
+  // sur une table qui grossit à chaque tentative de connexion/inscription.
+  @@index([identifier, used])
 }
 
 // Événement

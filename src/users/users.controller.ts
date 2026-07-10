@@ -5,7 +5,6 @@ import {
   Post,
   Body,
   Patch,
-  Param,
   Delete,
   UseGuards,
   Req,
@@ -24,27 +23,12 @@ import { VerifyAccountDeletionDto } from './dto/verify-account-deletion.dto';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  // @Post()
-  // create(@Body() createUserDto: CreateUserDto) {
-  //   return this.usersService.creat(createUserDto);
-  // }
-
-  @Get()
-  findAll() {
-    return this.usersService.findAll();
-  }
-
   // Profil de l'utilisateur connecté — utilisé par le frontend pour
-  // l'hydratation de session. Déclaré AVANT ':id' pour ne pas être capturé.
+  // l'hydratation de session.
   @UseGuards(JwtAuthGuard)
   @Get('me')
   me(@Req() req) {
     return this.usersService.findMe(req.user.sub);
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(+id);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -110,10 +94,5 @@ export class UsersController {
       dto.otp,
       tempToken,
     );
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(+id);
   }
 }

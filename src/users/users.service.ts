@@ -42,10 +42,6 @@ export class UsersService {
     private readonly otpService: OtpService,
   ) {}
 
-  findAll() {
-    return `This action returns all users`;
-  }
-
   // Profil de l'utilisateur connecté (champs publics uniquement —
   // jamais le hashedPassword ni les compteurs internes).
   async findMe(userId: string) {
@@ -68,10 +64,6 @@ export class UsersService {
       throw new NotFoundException('Utilisateur introuvable.');
     }
     return user;
-  }
-
-  findOne(id: number) {
-    return `This action returns a #${id} user`;
   }
 
   async update(userId: string, dto: UpdateUserDto) {
@@ -441,9 +433,5 @@ export class UsersService {
         'Votre compte a été désactivé. Il sera définitivement supprimé dans deux semaines. ' +
         'Vous pouvez revenir en arrière en contactant le support pendant ce délai.',
     };
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} user`;
   }
 }

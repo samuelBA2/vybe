@@ -323,12 +323,4 @@ export class AuthService {
 
     return this.signToken({ sub: user.id, role: user.role });
   }
-
-  findAll() {
-    return `This action returns all auth`;
-  }
-
-  findOne(id: number) {
-    return `This action returns a #${id} auth`;
-  }
 }

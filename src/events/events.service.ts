@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { MailService } from 'src/mail/mail.service';
@@ -10,6 +15,8 @@ const MAX_TOTAL_CAPACITY = 50000;
 
 @Injectable()
 export class EventsService {
+  private readonly logger = new Logger(EventsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
@@ -172,30 +179,45 @@ export class EventsService {
       process.env.VYBE_TEAM_EMAIL ?? process.env.SENDGRID_FROM_EMAIL!;
     const poster = posters[0];
 
-    await this.mailService.sendEventModerationEmail({
-      to: teamEmail, // à verifier, le mail de l'équipe vybe
-      title: dto.title,
-      description: dto.description,
-      startDate: start,
-      endDate: end,
-      location: dto.location,
-      gpsLat: dto.gpsLat ?? null,
-      gpsLng: dto.gpsLng ?? null,
-      category: dto.category,
-      dressCode: dto.dressCode ?? null,
-      purchaseDeadline: deadline,
-      creatorLabel: event.createdBy?.email ?? userId,
-      posterUrl: poster.url,
-      totalCapacity: eventCapacity,
-      ticketCategories: dto.ticketCategories.map((t) => ({
-        name: t.name,
-        price: t.price,
-        ticketDesignUrl: t.ticketDesignUrl,
-        totalStock: dto.unlimitedStock === true ? null : (t.totalStock ?? null),
-      })),
-      approveUrl,
-      rejectUrl,
-    });
+    // L'événement est déjà persisté (source de vérité). L'envoi d'email est une
+    // action externe non transactionnelle : un échec SendGrid ne doit PAS faire
+    // échouer la requête ni laisser croire au client que la création a raté.
+    // On retente automatiquement (pannes passagères) puis on logge en dernier
+    // recours pour permettre une re-notification manuelle.
+    try {
+      await this.sendWithRetry(() =>
+        this.mailService.sendEventModerationEmail({
+          to: teamEmail, // à verifier, le mail de l'équipe vybe
+          title: dto.title,
+          description: dto.description,
+          startDate: start,
+          endDate: end,
+          location: dto.location,
+          gpsLat: dto.gpsLat ?? null,
+          gpsLng: dto.gpsLng ?? null,
+          category: dto.category,
+          dressCode: dto.dressCode ?? null,
+          purchaseDeadline: deadline,
+          creatorLabel: event.createdBy?.email ?? userId,
+          posterUrl: poster.url,
+          totalCapacity: eventCapacity,
+          ticketCategories: dto.ticketCategories.map((t) => ({
+            name: t.name,
+            price: t.price,
+            ticketDesignUrl: t.ticketDesignUrl,
+            totalStock:
+              dto.unlimitedStock === true ? null : (t.totalStock ?? null),
+          })),
+          approveUrl,
+          rejectUrl,
+        }),
+      );
+    } catch (err) {
+      this.logger.error(
+        `Échec de l'envoi de l'email de modération pour l'événement ${event.id} après plusieurs tentatives`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
 
     return {
       message:
@@ -203,5 +225,27 @@ export class EventsService {
       eventId: event.id,
       status: event.status,
     };
+  }
+
+  // Retente une action asynchrone (ici l'envoi d'email) en cas d'échec passager.
+  // Délai croissant entre les tentatives (1s, 2s…). Invisible pour le client :
+  // tout se déroule côté serveur pendant le traitement de la requête.
+  // Relance l'erreur après la dernière tentative (l'appelant décide quoi en faire).
+  private async sendWithRetry(
+    action: () => Promise<unknown>,
+    attempts = 3,
+  ): Promise<void> {
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        await action();
+        return;
+      } catch (err) {
+        if (i === attempts) throw err;
+        this.logger.warn(
+          `Tentative ${i}/${attempts} d'envoi d'email échouée, nouvelle tentative…`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, i * 1000));
+      }
+    }
   }
 }
