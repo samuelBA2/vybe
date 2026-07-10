@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { JwtService } from '@nestjs/jwt';
 import { OtpService } from 'src/otp/otp.service';
+import { BCRYPT_ROUNDS } from 'src/common/constants';
 
 const MAX_UPDATES_PER_MONTH = 2;
 
@@ -198,7 +199,7 @@ export class UsersService {
       );
     }
     // Hasher et sauvegarder
-    const newHash = await bcrypt.hash(dto.newPassword, 12);
+    const newHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
 
     await this.prisma.user.update({
       where: { id: userId },

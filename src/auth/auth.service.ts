@@ -23,6 +23,7 @@ import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
 import { randomUUID } from 'crypto';
+import { BCRYPT_ROUNDS } from 'src/common/constants';
 
 @Injectable()
 export class AuthService {
@@ -277,7 +278,7 @@ export class AuthService {
     }
 
     //Créer le compte utilisateur et invalidation du token temporaire (en stockant son jti en base)
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     const data: any = {
       firstname: dto.firstName,
       lastname: dto.lastName,

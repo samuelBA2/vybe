@@ -67,6 +67,13 @@ export class EventsController {
   // accidentelle par préchargement du lien GET). Le bouton déclenche un POST.
   @Get('moderate')
   @Header('Content-Type', 'text/html')
+  // Surcharge de la CSP UNIQUEMENT pour cette page HTML : autorise les styles
+  // inline (attributs style="...") sans assouplir la CSP stricte du reste de l'API.
+  // script-src reste verrouillé (aucun JS), frame-ancestors 'none' = anti-clickjacking.
+  @Header(
+    'Content-Security-Policy',
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+  )
   moderatePage(
     @Query('token') token: string,
     @Query('decision') decision: string,

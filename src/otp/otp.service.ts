@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { SmsService } from 'src/sms/sms.service';
 import { randomInt } from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { MailService } from 'src/mail/mail.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 
@@ -43,7 +44,7 @@ export class OtpService {
       return { message: 'Un code de verification vous a été envoyé par email' };
     }
 
-    const otp = await this.generateUniqueOtp();
+    const otp = this.generateOtp();
     await this.persistOtp(email, otp);
 
     try {
@@ -68,7 +69,7 @@ export class OtpService {
       );
       return { message: 'Un code de verification vous a été envoyé' };
     }
-    const otp = await this.generateUniqueOtp();
+    const otp = this.generateOtp();
     await this.persistOtp(phone, otp);
 
     try {
@@ -93,7 +94,7 @@ export class OtpService {
     await this.checkBlock(email);
     await this.checkResendCooldown(email);
 
-    const otp = await this.generateUniqueOtp();
+    const otp = this.generateOtp();
     await this.persistOtp(email, otp);
 
     try {
@@ -112,7 +113,7 @@ export class OtpService {
     await this.checkBlock(phone);
     await this.checkResendCooldown(phone);
 
-    const otp = await this.generateUniqueOtp();
+    const otp = this.generateOtp();
     await this.persistOtp(phone, otp);
 
     try {
@@ -136,7 +137,7 @@ export class OtpService {
     await this.checkBlock(email);
     await this.checkResendCooldown(email);
 
-    const otp = await this.generateUniqueOtp();
+    const otp = this.generateOtp();
     await this.persistOtp(email, otp);
 
     try {
@@ -155,7 +156,7 @@ export class OtpService {
     await this.checkBlock(phone);
     await this.checkResendCooldown(phone);
 
-    const otp = await this.generateUniqueOtp();
+    const otp = this.generateOtp();
     await this.persistOtp(phone, otp);
 
     try {
@@ -189,8 +190,9 @@ export class OtpService {
       throw new BadRequestException('Code OTP invalide ou expiré');
     }
 
-    // 3. Code incorrect
-    if (record.code !== code) {
+    // 3. Code incorrect (comparaison avec le hash stocké)
+    const matches = await bcrypt.compare(code, record.code);
+    if (!matches) {
       const newAttempts = record.attempts + 1;
 
       if (newAttempts >= MAX_VERIFICATION_ATTEMPTS) {
@@ -253,20 +255,17 @@ export class OtpService {
     }
   }
 
-  private async generateUniqueOtp(): Promise<string> {
-    let otp = '';
-    let exists = true;
-    while (exists) {
-      otp = String(randomInt(100000, 999999));
-      const found = await this.prisma.otpVerification.findFirst({
-        where: { code: otp, used: false, expiresAt: { gt: new Date() } },
-      });
-      exists = !!found;
-    }
-    return otp;
+  // Pas de contrainte d'unicité globale : elle réduirait l'entropie et
+  // créerait une course en base. L'OTP est lié à un identifier, un doublon
+  // entre deux utilisateurs est sans conséquence.
+  private generateOtp(): string {
+    return String(randomInt(100000, 1000000));
   }
 
   private async persistOtp(identifier: string, code: string): Promise<void> {
+    // Un OTP est un secret d'authentification : on ne stocke que son hash,
+    // une fuite de la base ne doit pas exposer les codes actifs.
+    const codeHash = await bcrypt.hash(code, 10);
     const expiresAt = new Date(Date.now() + OTP_EXPIRATION_MS);
     await this.prisma.$transaction(async (tx) => {
       await tx.otpVerification.updateMany({
@@ -274,7 +273,13 @@ export class OtpService {
         data: { used: true },
       });
       await tx.otpVerification.create({
-        data: { identifier, code, expiresAt, used: false, attempts: 0 },
+        data: {
+          identifier,
+          code: codeHash,
+          expiresAt,
+          used: false,
+          attempts: 0,
+        },
       });
     });
   }

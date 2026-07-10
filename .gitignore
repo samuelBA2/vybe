@@ -64,3 +64,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Dumps de base de données (jamais committer — données + potentiels secrets)
 backup_*.sql
 *.dump
+
+# Recap interne d'audit (notes de travail, non versionnées)
+docs/recap-audit-securite.md

@@ -85,8 +85,6 @@ Full event creation in a single `POST /events` (authenticated, `ADMIN` only). Th
 3. `POST /events/moderate` (public, body `{ token, decision }`) — `EventModerationService.moderate` verifies the JWT token (`type: 'event-moderation'`, 7-day expiry), checks anti-replay via `UsedToken.jti`, validates the event is still `PENDING_REVIEW`, then in a `$transaction`: updates status to `PUBLISHED` or `REJECTED` + creates `UsedToken`. Notifies the creator by email if they have one.
 4. `GET /events/:id` (public) — returns the full event with media, ticket categories, and creator info.
 
-**Known bug:** `complete-profile` in `auth.service` does not set `emailVerified: true` / `phoneVerified: true` when creating the user, which prevents re-login via `login/email` or `login/phone` (they require the verified flag). This needs a fix in `AuthService.completeProfile`.
-
 ### Config
 `ConfigModule` is global. Key env vars: `DATABASE_URL`, `JWT_SECRET`, `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`, `SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`/`SENDGRID_FROM_NAME`, `PORT`, `VYBE_TEAM_EMAIL` (moderation email recipient, fallback `SENDGRID_FROM_EMAIL`), `API_BASE_URL` (base URL for magic links, e.g. `http://localhost:3000`).
 
