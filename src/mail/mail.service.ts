@@ -35,9 +35,8 @@ export interface ModerationEmailParams {
 export class MailService {
   private logger = new Logger(MailService.name);
 
-  constructor() {
-    sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
-    this;
+  constructor(private readonly config: ConfigService) {
+    sgMail.setApiKey(this.config.get<string>('SENDGRID_API_KEY')!);
   }
 
   async sendOtp(to: string, otp: string, expiresInMinutes = 10): Promise<void> {

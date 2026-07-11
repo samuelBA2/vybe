@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { MailService } from './mail.service';
 import sgMail from '@sendgrid/mail';
 
@@ -15,7 +16,11 @@ describe('MailService — événements', () => {
 
   beforeEach(() => {
     send.mockClear();
-    service = new MailService();
+    // Config factice : lit les variables d'environnement (comportement identique au run réel).
+    const config = {
+      get: (key: string) => process.env[key],
+    } as unknown as ConfigService;
+    service = new MailService(config);
   });
 
   it('sendEventModerationEmail envoie un mail contenant le titre, l’affiche et les liens', async () => {

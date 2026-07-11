@@ -11,7 +11,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
-import { $Enums } from '@prisma/client';
+import { $Enums, Prisma } from '@prisma/client';
 import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
 import { VerifyEmailOtpDto } from 'src/auth/dto/verify-mail.dto';
@@ -158,7 +158,7 @@ export class AuthService {
 
     //token temporaire qui transporte le numero jusqu'à la vérification
     const tempToken = this.jwt.sign(
-      { phone: dto.phone, purpose: 'verify', Jti: randomUUID() },
+      { phone: dto.phone, purpose: 'verify', jti: randomUUID() },
       { secret: process.env.JWT_SECRET, expiresIn: '15min' },
     );
     return {
@@ -279,7 +279,7 @@ export class AuthService {
 
     //Créer le compte utilisateur et invalidation du token temporaire (en stockant son jti en base)
     const hash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    const data: any = {
+    const data: Prisma.UserCreateInput = {
       firstname: dto.firstName,
       lastname: dto.lastName,
       hashedPassword: hash,

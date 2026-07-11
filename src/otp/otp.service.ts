@@ -206,9 +206,11 @@ export class OtpService {
         );
       }
 
+      // Incrément atomique côté base : évite le lost update si deux tentatives
+      // arrivent simultanément (chaque échec est bien comptabilisé).
       await this.prisma.otpVerification.update({
         where: { id: record.id },
-        data: { attempts: newAttempts },
+        data: { attempts: { increment: 1 } },
       });
       throw new BadRequestException(
         `Code OTP invalide. ${MAX_VERIFICATION_ATTEMPTS - newAttempts} tentative(s) restante(s).`,
