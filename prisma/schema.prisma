@@ -78,7 +78,6 @@ model OtpVerification {
   // Défini après MAX tentatives échouées, bloque pendant 20 min
   blockedUntil DateTime?
   createdAt DateTime @default(now())
-
   //Null pour l'inscription, renseigné pour la reconnexion
   userId    String?
   user      User?    @relation(fields: [userId], references: [id])

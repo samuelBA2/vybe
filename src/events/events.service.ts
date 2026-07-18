@@ -81,7 +81,7 @@ export class EventsService {
     const posters = dto.media.filter((m) => m.isPoster);
     if (posters.length !== 1) {
       throw new BadRequestException(
-        'Vous devez fournir exactement une affiche (isPoster).',
+        'Vous devez fournir exactement une affiche .',
       );
     }
     if (dto.ticketCategories.length < 1 || dto.ticketCategories.length > 4) {
