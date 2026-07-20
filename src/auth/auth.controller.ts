@@ -65,7 +65,8 @@ export class AuthController {
   ) {
     const tokens = await this.authService.login(dto);
     setRefreshCookie(res, tokens.refreshToken);
-    return tokens;
+    // Le refresh token ne vit que dans le cookie httpOnly : jamais exposé au JS.
+    return { accessToken: tokens.accessToken };
   }
 
   // Mot de passe oublié : envoi de l'OTP vers le canal du compte.
@@ -110,7 +111,8 @@ export class AuthController {
   ) {
     const tokens = await this.authService.completeProfile(req, dto);
     setRefreshCookie(res, tokens.refreshToken);
-    return tokens;
+    // Le refresh token ne vit que dans le cookie httpOnly : jamais exposé au JS.
+    return { accessToken: tokens.accessToken };
   }
 
   // Renouvelle l'access token à partir du cookie httpOnly (rotation du refresh).
