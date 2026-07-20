@@ -14,16 +14,17 @@ import { AuthService } from './auth.service';
 // import { UpdateAuthDto } from './dto/update-auth.dto';
 import { Headers } from '@nestjs/common';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
-import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
 import { VerifyEmailOtpDto } from './dto/verify-mail.dto';
-import { LoginPhoneDto } from './dto/login-phone.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
 import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
+import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 // Nom du cookie httpOnly qui transporte le refresh token.
 // path restreint à /auth : le cookie n'est envoyé que sur les routes d'auth.
-const REFRESH_COOKIE = 'vybe_refresh';
+const REFRESH_COOKIE = 'vybe_refresh'; 
 const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours (aligné sur le JWT)
 
 function setRefreshCookie(res: Response, refreshToken: string) {
@@ -54,43 +55,34 @@ export class AuthController {
     return this.authService.sendPhoneOtp(dto);
   }
 
-  @Throttle({ default: { ttl: 60_000, limit: 3 } })
-  @Post('login/email')
-  loginEmail(@Body() dto: LoginEmailDto) {
-    return this.authService.loginEmail(dto);
-  }
-
-  // Vérification d'OTP : limite le brute force du code à 6 chiffres (en plus du compteur en base).
-  @Throttle({ default: { ttl: 60_000, limit: 5 } })
-  @Post('login/email/verify')
-  async verifyLoginEmail(
-    @Body() dto: VerifyEmailOtpDto,
-    @Headers('authorization') auth: string,
+  // Connexion par mot de passe. Verrou progressif géré côté service ; le throttle
+  // ajoute une barrière réseau contre le brute-force distribué.
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('login')
+  async login(
+    @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const token = auth?.replace('Bearer ', '');
-    const tokens = await this.authService.verifyLoginEmailOtp(dto, token);
+    const tokens = await this.authService.login(dto);
     setRefreshCookie(res, tokens.refreshToken);
     return tokens;
   }
 
+  // Mot de passe oublié : envoi de l'OTP vers le canal du compte.
   @Throttle({ default: { ttl: 60_000, limit: 3 } })
-  @Post('login/phone')
-  loginPhone(@Body() dto: LoginPhoneDto) {
-    return this.authService.loginPhone(dto);
+  @Post('password/forgot')
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
   }
 
+  // Réinitialisation : OTP + nouveau mot de passe (token via header x-temp-token).
   @Throttle({ default: { ttl: 60_000, limit: 5 } })
-  @Post('login/phone/verify')
-  async verifyLoginPhone(
-    @Body() dto: VerifyOtpDto,
-    @Headers('authorization') auth: string,
-    @Res({ passthrough: true }) res: Response,
+  @Post('password/reset')
+  resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Headers('x-temp-token') token: string,
   ) {
-    const token = auth?.replace('Bearer ', '');
-    const tokens = await this.authService.verifyLoginPhoneOtp(dto, token);
-    setRefreshCookie(res, tokens.refreshToken);
-    return tokens;
+    return this.authService.resetPassword(dto, token);
   }
 
   @Throttle({ default: { ttl: 60_000, limit: 5 } })

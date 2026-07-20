@@ -13,10 +13,8 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { $Enums, Prisma } from '@prisma/client';
-import { LoginEmailDto } from './dto/login-mail.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
 import { VerifyEmailOtpDto } from 'src/auth/dto/verify-mail.dto';
-import { LoginPhoneDto } from './dto/login-phone.dto';
 import { SmsService } from 'src/sms/sms.service';
 import { OtpService } from 'src/otp/otp.service';
 import { ConfigService } from '@nestjs/config';
@@ -265,103 +263,6 @@ export class AuthService {
     ]);
 
     return { message: 'Mot de passe modifié. Tu peux te connecter.' };
-  }
-
-  //connexion par email : envoie un OTP si le compte existe
-  async loginEmail(dto: LoginEmailDto) {
-
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-
-    if (user && user.emailVerified && user.isValid) {
-      try {
-        await this.OtpService.sendLoginEmailOtp(dto.email);
-      } catch {
-        // On n'expose pas l'état interne (cooldown/blocage) : réponse uniforme.
-      }
-    }
-    const tempToken = this.jwt.sign(
-      { email: dto.email, purpose: 'login-verify', jti: randomUUID() },
-      { secret: process.env.JWT_SECRET, expiresIn: '10m' },
-    );
-    return {
-      message: 'Un code de vérification vous a été envoyé.',
-      token: tempToken,
-    };
-  }
-
-  //connexion par téléphone : envoie un OTP si le compte existe
-  async loginPhone(dto: LoginPhoneDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { phone: dto.phone },
-    });
-
-    if (user && user.phoneVerified && user.isValid) {
-      try {
-        await this.OtpService.sendLoginPhoneOtp(dto.phone);
-      } catch {
-        // On n'expose pas l'état interne (cooldown/blocage) : réponse uniforme.
-      }
-    }
-
-    const tempToken = this.jwt.sign(
-      { phone: dto.phone, purpose: 'login-verify', jti: randomUUID() },
-      { secret: process.env.JWT_SECRET, expiresIn: '10m' },
-    );
-    return {
-      message: 'Un code de vérification vous a été envoyé.',
-      token: tempToken,
-    };
-  }
-
-  //vérification du code OTP de connexion (email)
-  async verifyLoginEmailOtp(dto: VerifyEmailOtpDto, token: string) {
-    let payload: any;
-    try {
-      payload = this.jwt.verify(token, { secret: process.env.JWT_SECRET });
-    } catch {
-      throw new UnauthorizedException('Session expirée. Veuillez recommencer.');
-    }
-
-    if (payload.purpose !== 'login-verify' || !payload.email) {
-      throw new UnauthorizedException('Token invalide');
-    }
-
-    await this.OtpService.verifyOtp(payload.email, dto.otp);
-
-    const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
-    });
-    if (!user || !user.isValid)
-      throw new UnauthorizedException('Identifiants invalides');
-    
-    return this.signToken({ sub: user.id, role: user.role });
-  }
-
-  //vérification du code OTP de connexion (téléphone)
-  async verifyLoginPhoneOtp(dto: VerifyOtpDto, token: string) {
-    let payload: any;
-    try {
-      payload = this.jwt.verify(token, { secret: process.env.JWT_SECRET });
-    } catch {
-      throw new UnauthorizedException('Session expirée. Veuillez recommencer.');
-    }
-
-    if (payload.purpose !== 'login-verify' || !payload.phone) {
-      throw new UnauthorizedException('Token invalide');
-    }
-
-    await this.OtpService.verifyOtp(payload.phone, dto.otp);
-
-    const user = await this.prisma.user.findUnique({
-      where: { phone: payload.phone },
-    });
-    if (!user || !user.isValid)
-      throw new UnauthorizedException('Identifiants invalides');
-
-    return this.signToken({ sub: user.id, role: user.role });
   }
 
   //Inscription par téléphone : envoie et vérification du code OTP premiere étape de la création du compte
