@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  ForbiddenException,
   ConflictException,
   Body,
   Req,
@@ -23,7 +24,19 @@ import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
 import { randomUUID } from 'crypto';
-import { BCRYPT_ROUNDS } from 'src/common/constants';
+import {
+  BCRYPT_ROUNDS,
+  MAX_LOGIN_ATTEMPTS,
+  LOGIN_LOCK_DURATIONS_MS,
+} from 'src/common/constants';
+import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+
+// Hash factice comparé quand le compte n'existe pas / n'a pas de mot de passe :
+// aligne le temps de réponse sur celui d'un vrai bcrypt.compare et évite de
+// révéler l'inexistence d'un compte par le timing.
+const DUMMY_HASH = bcrypt.hashSync('vybe-dummy-timing-guard', BCRYPT_ROUNDS);
 
 @Injectable()
 export class AuthService {
@@ -53,6 +66,205 @@ export class AuthService {
     );
 
     return { accessToken, refreshToken };
+  }
+
+  // Détermine si l'identifiant est un email (présence d'un @) ou un téléphone,
+  // et fournit la clause Prisma + le canal d'envoi OTP correspondant.
+  private resolveIdentifier(identifier: string): {
+    where: { email: string } | { phone: string };
+    channel: 'email' | 'phone';
+  } {
+    if (identifier.includes('@')) {
+      return { where: { email: identifier }, channel: 'email' };
+    }
+    return { where: { phone: identifier }, channel: 'phone' };
+  }
+
+  // Verrou actif ? Lève un 403 avec le timestamp de fin (pour le compte à rebours front).
+  private assertNotLocked(user: {
+    loginLockedUntil: Date | null;
+  }): void {
+    if (user.loginLockedUntil && user.loginLockedUntil.getTime() > Date.now()) {
+      const remainingMin = Math.ceil(
+        (user.loginLockedUntil.getTime() - Date.now()) / 60000,
+      );
+      throw new ForbiddenException({
+        message: `Trop de tentatives. Compte bloqué, réessayez dans ${remainingMin} minute(s).`,
+        lockedUntil: user.loginLockedUntil.toISOString(),
+      });
+    }
+  }
+
+  // ─── Connexion par mot de passe (verrou progressif 5min → 1h → 12h) ───────────
+  async login(dto: LoginDto) {
+    const { where } = this.resolveIdentifier(dto.identifier);
+    const user = await this.prisma.user.findUnique({ where });
+
+    // Compte absent / invalide / sans mot de passe : réponse générique + hash
+    // factice pour ne pas révéler l'inexistence (ni par le message, ni par le temps).
+    if (!user || !user.isValid || !user.hashedPassword) {
+      await bcrypt.compare(dto.password, DUMMY_HASH);
+      throw new UnauthorizedException('Identifiants invalides');
+    }
+
+    // Verrou actif : on ne compare même pas le mot de passe.
+    this.assertNotLocked(user);
+
+    const matches = await bcrypt.compare(dto.password, user.hashedPassword);
+
+    if (!matches) {
+      const newAttempts = user.failedLoginAttempts + 1;
+
+      // Franchissement d'un palier : on pose le verrou et on incrémente le niveau.
+      if (newAttempts >= MAX_LOGIN_ATTEMPTS) {
+        const durationIndex = Math.min(
+          user.loginLockLevel,
+          LOGIN_LOCK_DURATIONS_MS.length - 1,
+        );
+        const lockedUntil = new Date(
+          Date.now() + LOGIN_LOCK_DURATIONS_MS[durationIndex],
+        );
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginAttempts: 0,
+            loginLockLevel: user.loginLockLevel + 1,
+            loginLockedUntil: lockedUntil,
+          },
+        });
+        const remainingMin = Math.ceil(
+          (lockedUntil.getTime() - Date.now()) / 60000,
+        );
+        throw new ForbiddenException({
+          message: `Trop de tentatives. Compte bloqué, réessayez dans ${remainingMin} minute(s).`,
+          lockedUntil: lockedUntil.toISOString(),
+        });
+      }
+
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: newAttempts },
+      });
+      throw new UnauthorizedException(
+        `Mot de passe incorrect. Il te reste ${MAX_LOGIN_ATTEMPTS - newAttempts} essai(s).`,
+      );
+    }
+
+    // Succès : remise à zéro complète (compteur + palier + verrou).
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedLoginAttempts: 0,
+        loginLockLevel: 0,
+        loginLockedUntil: null,
+      },
+    });
+    return this.signToken({ sub: user.id, role: user.role });
+  }
+
+  // ─── Mot de passe oublié : envoi de l'OTP ─────────────────────────────────────
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const { where, channel } = this.resolveIdentifier(dto.identifier);
+    const user = await this.prisma.user.findUnique({ where });
+
+    // Sous verrou actif : le reset ne doit pas offrir de contournement.
+    if (user) {
+      this.assertNotLocked(user);
+    }
+
+    if (user && user.isValid) {
+      try {
+        if (channel === 'email') {
+          await this.OtpService.sendLoginEmailOtp(dto.identifier);
+        } else {
+          await this.OtpService.sendLoginPhoneOtp(dto.identifier);
+        }
+      } catch {
+        // On n'expose pas l'état interne (cooldown/blocage) : réponse uniforme.
+      }
+    }
+
+    // Réponse identique que le compte existe ou non (anti-énumération).
+    const token = this.jwt.sign(
+      {
+        identifier: dto.identifier,
+        purpose: 'password-reset',
+        jti: randomUUID(),
+      },
+      { secret: process.env.JWT_SECRET, expiresIn: '10m' },
+    );
+    return {
+      message: 'Si un compte existe, un code de vérification a été envoyé.',
+      token,
+    };
+  }
+
+  // ─── Mot de passe oublié : vérification OTP + changement de mot de passe ───────
+  async resetPassword(dto: ResetPasswordDto, token: string) {
+    let payload: any;
+    try {
+      payload = this.jwt.verify(token, { secret: process.env.JWT_SECRET });
+    } catch {
+      throw new BadRequestException(
+        'Ce lien a expiré, recommence la réinitialisation.',
+      );
+    }
+
+    if (payload.purpose !== 'password-reset' || !payload.identifier) {
+      throw new BadRequestException('Token invalide.');
+    }
+
+    // Anti-rejeu : un même token ne peut réinitialiser qu'une fois.
+    const alreadyUsed = await this.prisma.usedToken.findUnique({
+      where: { jti: payload.jti },
+    });
+    if (alreadyUsed) {
+      throw new BadRequestException(
+        'Ce lien a expiré, recommence la réinitialisation.',
+      );
+    }
+
+    const { where } = this.resolveIdentifier(payload.identifier);
+    const user = await this.prisma.user.findUnique({ where });
+    if (!user || !user.isValid) {
+      throw new BadRequestException('Compte introuvable.');
+    }
+
+    // Garde-fou : pas de reset sous verrou actif.
+    this.assertNotLocked(user);
+
+    // Vérifie l'OTP (gère ses propres tentatives + blocage du code).
+    await this.OtpService.verifyOtp(payload.identifier, dto.otp);
+
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Les mots de passe ne correspondent pas.');
+    }
+
+    // Refuse de réutiliser le mot de passe actuel.
+    if (user.hashedPassword) {
+      const same = await bcrypt.compare(dto.newPassword, user.hashedPassword);
+      if (same) {
+        throw new BadRequestException(
+          "Le nouveau mot de passe doit différer de l'ancien.",
+        );
+      }
+    }
+
+    const newHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          hashedPassword: newHash,
+          failedLoginAttempts: 0,
+          loginLockLevel: 0,
+          loginLockedUntil: null,
+        },
+      }),
+      this.prisma.usedToken.create({ data: { jti: payload.jti } }),
+    ]);
+
+    return { message: 'Mot de passe modifié. Tu peux te connecter.' };
   }
 
   //connexion par email : envoie un OTP si le compte existe
