@@ -42,6 +42,14 @@ model User {
   // Un compte invalide ne peut plus se connecter mais reste récupérable.
   isValid            Boolean   @default(true)
   deletionRequestedAt DateTime? // date de la demande de suppression (point de départ des 2 semaines)
+
+  // Verrou progressif de connexion par mot de passe.
+  // failedLoginAttempts : compteur de la série en cours (0..5), remis à 0 à chaque verrou et à chaque succès.
+  // loginLockLevel : palier atteint (0 aucun, 1 → 5min, 2 → 1h, 3+ → 12h), ne redescend que sur connexion réussie.
+  // loginLockedUntil : fin du verrou en cours ; null = pas de verrou actif.
+  failedLoginAttempts Int       @default(0)
+  loginLockLevel      Int       @default(0)
+  loginLockedUntil    DateTime?
 }
 
 model UsedToken {
