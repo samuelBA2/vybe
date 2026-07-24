@@ -7,10 +7,12 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { EventModerationService } from './event-moderation.service';
+import { CloudinaryModule } from 'src/cloudinary/cloudinary.module';
 
 @Module({
   imports: [
     PrismaModule,
+    CloudinaryModule,
     MailModule,
     AuthModule, // fournit JwtAuthGuard (réexporté)
     JwtModule.register({ secret: process.env.JWT_SECRET }),

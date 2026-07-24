@@ -19,7 +19,7 @@ export interface ModerationEmailParams {
   dressCode: string | null;
   purchaseDeadline: Date;
   creatorLabel: string;
-  posterUrl: string;
+  posterUrl: string | null;
   totalCapacity: number | null;
   ticketCategories: {
     name: string;
@@ -355,7 +355,7 @@ export class MailService {
           <h1 style="color:#fff;margin:0;font-size:22px;">Événement à modérer</h1>
         </td></tr>
         <tr><td style="padding:24px 32px;">
-          <img src="${params.posterUrl}" alt="affiche" width="536" style="width:100%;border-radius:12px;margin-bottom:24px;"/>
+          ${params.posterUrl ? `<img src="${params.posterUrl}" alt="affiche" width="536" style="width:100%;border-radius:12px;margin-bottom:24px;"/>` : ''}
           <h2 style="color:#fff;margin:0 0 16px;">${params.title}</h2>
           <p style="color:#aaa;line-height:1.6;">${params.description}</p>
           <table width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;background:#1a1a1a;border-radius:10px;">

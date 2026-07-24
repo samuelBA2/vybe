@@ -13,6 +13,7 @@ import { OtpModule } from './otp/otp.module';
 import { SmsModule } from './sms/sms.module';
 import { MailModule } from './mail/mail.module';
 import { EventsModule } from './events/events.module';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { EventsModule } from './events/events.module';
     SmsModule,
     MailModule,
     EventsModule,
+    CloudinaryModule,
   ],
   controllers: [AppController],
   providers: [

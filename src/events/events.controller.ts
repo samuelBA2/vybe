@@ -7,7 +7,9 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -16,6 +18,10 @@ import { EventsService } from './events.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ModerateDto } from './dto/moderate.dto';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { CloudinaryFolder } from '../cloudinary/cloudinary.folder';
+
 
 // Échappe les caractères spéciaux HTML : toute valeur non fiable (query string,
 // saisie utilisateur) DOIT passer par cette fonction avant d'être insérée dans du HTML.
@@ -38,6 +44,7 @@ export class EventsController {
   constructor(
     private readonly eventsService: EventsService,
     private readonly moderationService: EventModerationService,
+    private readonly cloudinary: CloudinaryService,
   ) {}
 
   // Création réservée aux organisateurs (rôle USER) ; les agents de sécurité en sont exclus.
@@ -104,5 +111,22 @@ export class EventsController {
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.eventsService.findOne(id);
+  }
+
+  // endpoint pour envoyer l'image vers le serveur cloudinary
+  @Post(':id/poster')
+  @UseInterceptors(FilesInterceptor('file'))
+  async uploadPoster(
+    @Param('id') eventId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ){
+    const result = await this.cloudinary.uploadImage(
+      file,
+      CloudinaryFolder.EVENT_POSTERS,
+    );
+    return this.eventsService.updatePoster(eventId, {
+      url: result.secure_url,
+      publicId: result.public_id,
+    });
   }
 }

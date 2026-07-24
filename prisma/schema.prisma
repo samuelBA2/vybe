@@ -129,14 +129,18 @@ model EventMedia {
   id        String    @id @default(uuid())
   eventId   String
   event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  url       String
-  fileKey   String    // clé S3/R2
+  url       String?    // secure_url Cloudinary
+  publicId  String?    // public_id Cloudinary (pour delete/transform)
   fileName  String
   mimeType  String
   sizeBytes Int
   mediaType MediaType
   isPoster  Boolean   @default(false) // true pour l'affiche (exactement 1 par événement)
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([eventId])
+  @@index([eventId, isPoster])
 }
 
 enum MediaType {

@@ -33,6 +33,15 @@ export class EventsService {
     });
   }
 
+  // Met à jour l'affiche (EventMedia isPoster) après upload Cloudinary :
+  // on remplace url + fileKey de la ligne poster existante de l'événement.
+  async updatePoster(eventId: string, media: { url: string; publicId: string }) {
+    return this.prisma.eventMedia.updateMany({
+      where: { eventId, isPoster: true },
+      data: { url: media.url, publicId: media.publicId },
+    });
+  }
+
   // Événements de l'organisateur connecté, tous statuts confondus
   // (il doit voir ses événements en attente de modération).
   async findMine(userId: string) {
@@ -79,9 +88,9 @@ export class EventsService {
     }
 
     const posters = dto.media.filter((m) => m.isPoster);
-    if (posters.length !== 1) {
+    if (posters.length > 1) {
       throw new BadRequestException(
-        'Vous devez fournir exactement une affiche .',
+        "Un événement ne peut avoir qu'une seule affiche.",
       );
     }
     if (dto.ticketCategories.length < 1 || dto.ticketCategories.length > 4) {
@@ -199,7 +208,7 @@ export class EventsService {
           dressCode: dto.dressCode ?? null,
           purchaseDeadline: deadline,
           creatorLabel: event.createdBy?.email ?? userId,
-          posterUrl: poster.url,
+          posterUrl: poster?.url ?? null,
           totalCapacity: eventCapacity,
           ticketCategories: dto.ticketCategories.map((t) => ({
             name: t.name,

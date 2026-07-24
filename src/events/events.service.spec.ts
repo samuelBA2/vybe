@@ -79,12 +79,20 @@ describe('EventsService.createEvent', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('refuse si aucune affiche (isPoster) n’est présente', async () => {
+  it('accepte un événement sans affiche (0 affiche autorisée)', async () => {
     const dto = baseDto();
     dto.media[0].isPoster = false;
-    await expect(service.createEvent('user-1', dto)).rejects.toThrow(
-      BadRequestException,
-    );
+
+    const res = await service.createEvent('user-1', dto);
+
+    // L'événement est bien créé…
+    expect(prisma.event.create).toHaveBeenCalledTimes(1);
+    expect(res.eventId).toBe('evt-1');
+    // …et l'e-mail de modération part quand même, avec une affiche nulle
+    // (et non un crash silencieux sur `poster.url`).
+    expect(mail.sendEventModerationEmail).toHaveBeenCalledTimes(1);
+    const mailArg = mail.sendEventModerationEmail.mock.calls[0][0];
+    expect(mailArg.posterUrl).toBeNull();
   });
 
   it('refuse si plusieurs affiches sont marquées', async () => {
