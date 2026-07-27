@@ -14,6 +14,8 @@ import { SmsModule } from './sms/sms.module';
 import { MailModule } from './mail/mail.module';
 import { EventsModule } from './events/events.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
@@ -23,6 +25,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
     AuthModule,
     PrismaModule,
+    ScheduleModule.forRoot(),
     JwtModule.registerAsync({
   imports: [ConfigModule],
   inject: [ConfigService],
@@ -37,6 +40,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
     MailModule,
     EventsModule,
     CloudinaryModule,
+    UploadsModule,
   ],
   controllers: [AppController],
   providers: [

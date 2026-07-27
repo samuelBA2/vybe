@@ -14,3 +14,22 @@ export const LOGIN_LOCK_DURATIONS_MS = [
   60 * 60 * 1000, // palier 2 : 1 heure
   12 * 60 * 60 * 1000, // palier 3+ : 12 heures
 ];
+
+// ─── Upload de médias
+export const MAX_BYTES = 15 * 1024 * 1024 
+
+// MIME autorisés → validés par les MAGIC BYTES (jamais par le mimeType client).
+export const ALLOWED_MIME = new Set<string>([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+]);
+
+// Mappagr d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
+export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
+  if (mime.startsWith('image/')) return 'IMAGE';
+  if (mime === 'application/pdf') return 'DOCUMENT';
+  return 'OTHER';
+}

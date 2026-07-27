@@ -143,6 +143,22 @@ model EventMedia {
   @@index([eventId, isPoster])
 }
 
+model UploadedAsset {
+  id        String        @id @default(uuid())
+  publicId  String        @unique          // = fileKey renvoyé au client
+  url       String
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  mediaType MediaType
+  ownerId   String                          // req.user.sub
+  attached  Boolean       @default(false)   // true quand rattaché à un Event
+  createdAt DateTime      @default(now())
+
+  @@index([attached, createdAt]) // pour le balayage de purge
+  @@index([ownerId])
+}
+
 enum MediaType {
   IMAGE
   VIDEO

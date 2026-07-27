@@ -18,7 +18,7 @@ import { EventsService } from './events.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ModerateDto } from './dto/moderate.dto';
-import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { CloudinaryFolder } from '../cloudinary/cloudinary.folder';
 
@@ -114,8 +114,9 @@ export class EventsController {
   }
 
   // endpoint pour envoyer l'image vers le serveur cloudinary
+  // NB : FileInterceptor (singulier) pour être cohérent avec @UploadedFile().
   @Post(':id/poster')
-  @UseInterceptors(FilesInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'))
   async uploadPoster(
     @Param('id') eventId: string,
     @UploadedFile() file: Express.Multer.File,

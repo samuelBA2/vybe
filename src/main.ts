@@ -6,6 +6,25 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { MulterError } from 'multer';
+import { Catch, ArgumentsHost, ExceptionFilter, HttpStatus } from '@nestjs/common';
+
+// Traduit les erreurs Multer (hors cycle Nest) en réponses HTTP propres :
+// LIMIT_FILE_SIZE → 413, le reste → 400. Sans ce filtre, un fichier trop
+// volumineux sort en 500 opaque (échec silencieux côté client).
+@Catch(MulterError)
+class MulterExceptionFilter implements ExceptionFilter {
+  catch(err: MulterError, host: ArgumentsHost) {
+    const res = host.switchToHttp().getResponse();
+    const status =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? HttpStatus.PAYLOAD_TOO_LARGE
+        : HttpStatus.BAD_REQUEST;
+    res
+      .status(status)
+      .json({ statusCode: status, message: `Upload refusé : ${err.message}` });
+  }
+}
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -51,6 +70,7 @@ async function bootstrap() {
   app.useGlobalFilters(
     new PrismaExceptionFilter(),
     new AllExceptionsFilter(),
+    new MulterExceptionFilter(),
   );
   await app.listen(process.env.PORT ?? 3000);
 }
