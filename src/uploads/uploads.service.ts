@@ -12,6 +12,17 @@ import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
 import { CloudinaryFolder } from 'src/cloudinary/cloudinary.folder';
 import { ALLOWED_MIME, MAX_BYTES, mimeToMediaType } from 'src/common/constants';
 
+// Rend lisible n'importe quelle erreur (Error OU objet simple type Cloudinary).
+// Évite les logs "[object Object]" qui masquent la cause réelle (403, EHOSTUNREACH…).
+function serializeError(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 @Injectable()
 export class UploadsService {
     private readonly logger = new Logger(UploadsService.name);
@@ -50,8 +61,11 @@ export class UploadsService {
         try {
             result = await this.cloudinary.uploadFile(file, CloudinaryFolder.EVENT_POSTERS, resourceType)
         } catch (err){
-            this.logger.error(`Echec upload Cloudinary (owner ${ownerId})`,
-                err instanceof Error ? err.stack : String(err),
+            // Les erreurs Cloudinary sont des objets simples (message, http_code),
+            // pas des instances Error → String(err) donnerait "[object Object]".
+            // On sérialise pour rendre la cause réelle visible dans les logs.
+            this.logger.error(
+                `Echec upload Cloudinary (owner ${ownerId}) : ${serializeError(err)}`,
             );
             throw new BadRequestException("L'upload a échoué, réessayez.");
         }
