@@ -15,10 +15,20 @@ export const LOGIN_LOCK_DURATIONS_MS = [
   12 * 60 * 60 * 1000, // palier 3+ : 12 heures
 ];
 
+
 // ─── Upload de médias
 export const MAX_BYTES = 15 * 1024 * 1024 
 
 // MIME autorisés → validés par les MAGIC BYTES (jamais par le mimeType client).
+
+// ─── Upload de fichiers (affiches, designs de billets, documents) ─────────────
+import { $Enums } from '@prisma/client';
+
+// Taille maximale acceptée côté serveur (revalidée après multer).
+export const MAX_BYTES = 10 * 1024 * 1024; // 10 Mo
+
+// Types MIME autorisés, vérifiés par MAGIC BYTES (jamais file.mimetype).
+
 export const ALLOWED_MIME = new Set<string>([
   'image/jpeg',
   'image/png',
@@ -27,9 +37,17 @@ export const ALLOWED_MIME = new Set<string>([
   'application/pdf',
 ]);
 
+
 // Mappagr d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
 export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
   if (mime.startsWith('image/')) return 'IMAGE';
   if (mime === 'application/pdf') return 'DOCUMENT';
   return 'OTHER';
+
+// Associe un MIME détecté au MediaType Prisma stocké en base.
+export function mimeToMediaType(mime: string): $Enums.MediaType {
+  if (mime === 'application/pdf') return $Enums.MediaType.DOCUMENT;
+  if (mime.startsWith('image/')) return $Enums.MediaType.IMAGE;
+  return $Enums.MediaType.OTHER;
+
 }
