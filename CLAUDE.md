@@ -94,6 +94,10 @@ Jest config in `package.json` includes `moduleNameMapper: { "^src/(.*)$": "<root
 ## Linting notes
 `@typescript-eslint/no-explicit-any` is off, `no-floating-promises` and `no-unsafe-argument` are warnings (not errors) per `eslint.config.mjs`.
 
+## TODO avant mise en production
+
+- **Scan antivirus des PDF uploadés** — `POST /uploads` (`UploadsService`) accepte `application/pdf` (`ALLOWED_MIME` dans `src/common/constants.ts`) mais NE scanne PAS encore les PDF infectés/piégés. À implémenter avant la prod. Options évaluées : ClamAV/`clamscan` (vrai AV, nécessite un démon `clamd` — pas fourni par Render/Neon par défaut) ; scan heuristique sans infra (détecter `/JavaScript`, `/JS`, `/Launch`, `/OpenAction`, `/EmbeddedFile` dans le buffer) ; API externe (VirusTotal, expose le fichier à un tiers). Décision reportée. **Rappeler ce point à l'utilisateur au moment de préparer la prod.**
+
 ## Instructions
 
 - Ne pas ajouter "Co-Authored-By" dans les messages de commit git.

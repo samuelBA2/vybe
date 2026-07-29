@@ -74,14 +74,10 @@ export class EventsService {
       throw new BadRequestException('La date de début de votre evenement doit être dans le futur.');
     }
     if (end.getTime() <= start.getTime()) {
-      throw new BadRequestException(
-        'La date de fin doit être postérieure à la date de début.',
-      );
+      throw new BadRequestException('La date de fin doit être postérieure à la date de début.',);
     }
     if (deadline.getTime() > start.getTime()) {
-      throw new BadRequestException(
-        "La date limite d'achat ne peut pas dépasser la date de début.",
-      );
+      throw new BadRequestException("La date limite d'achat ne peut pas dépasser la date de début.",);
     }
     if (dto.termsAccepted !== true) {
       throw new BadRequestException('Vous devez accepter les conditions.');
@@ -89,14 +85,10 @@ export class EventsService {
 
     const posters = dto.media.filter((m) => m.isPoster);
     if (posters.length > 1) {
-      throw new BadRequestException(
-        "Un événement ne peut avoir qu'une seule affiche.",
-      );
+      throw new BadRequestException("Un événement ne peut avoir qu'une seule affiche.",);
     }
     if (dto.ticketCategories.length < 1 || dto.ticketCategories.length > 4) {
-      throw new BadRequestException(
-        'Vous devez définir entre 1 et 4 catégories de billets.',
-      );
+      throw new BadRequestException('Vous devez définir entre 1 et 4 catégories de billets.',);
     }
 
     // ── Stock : billetterie illimitée (case cochée) ou limitée (par défaut) ──
@@ -156,7 +148,7 @@ export class EventsService {
         mediaFiles: {
           create: dto.media.map((m) => ({
             url: m.url,
-            fileKey: m.fileKey,
+            publicId: m.fileKey, // fileKey renvoyé par /uploads = public_id Cloudinary
             fileName: m.fileName,
             mimeType: m.mimeType,
             sizeBytes: m.sizeBytes,
@@ -184,9 +176,19 @@ export class EventsService {
     const base = process.env.API_BASE_URL ?? '';
     const approveUrl = `${base}/events/moderate?token=${token}&decision=approve`;
     const rejectUrl = `${base}/events/moderate?token=${token}&decision=reject`;
-    const teamEmail =
-      process.env.VYBE_TEAM_EMAIL ?? process.env.SENDGRID_FROM_EMAIL!;
+    const teamEmail = process.env.VYBE_TEAM_EMAIL ?? process.env.SENDGRID_FROM_EMAIL!;
     const poster = posters[0];
+
+    // Les médias soumis ne sont plus orphelins → on les protège de la purge.
+    // updateMany filtré par ownerId : un utilisateur ne peut pas "revendiquer"
+    // le fichier d'un autre. Non bloquant si un fileKey est inconnu (0 update).
+    const filesKeys = dto.media.map((m) => m.fileKey);
+    if (filesKeys.length) {
+      await this.prisma.uploadedAsset.updateMany({
+        where: { publicId: { in: filesKeys}, ownerId: userId},
+        data: { attached: true },
+      })
+    }
 
     // L'événement est déjà persisté (source de vérité). L'envoi d'email est une
     // action externe non transactionnelle : un échec SendGrid ne doit PAS faire
