@@ -46,7 +46,14 @@ describe('EventsService.createEvent', () => {
       createdBy: { id: 'user-1', email: 'u@x.com' },
     };
     prisma = {
-      event: { create: jest.fn().mockResolvedValue(createdEvent) },
+      event: {
+        create: jest.fn().mockResolvedValue(createdEvent),
+        // generateUniqueReference() interroge findUnique jusqu'à obtenir une
+        // référence libre ; null = aucune collision, la 1re tentative suffit.
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      // Les médias soumis sont marqués "attachés" pour échapper à la purge.
+      uploadedAsset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };
@@ -144,7 +151,10 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
           title: 'Soirée',
           createdBy: { email: 'u@x.com' },
         }),
+        // Référence unique : aucune collision → 1re tentative acceptée.
+        findUnique: jest.fn().mockResolvedValue(null),
       },
+      uploadedAsset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };
