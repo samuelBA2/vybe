@@ -15,6 +15,11 @@ export const LOGIN_LOCK_DURATIONS_MS = [
   12 * 60 * 60 * 1000, // palier 3+ : 12 heures
 ];
 
+
+// Alphabet SANS caractères ambigus (pas de 0/O ni 1/I) : un code lisible,
+// dictable au téléphone sans confusion. 32 caractères.
+export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789';
+
 // ─── Upload de médias
 export const MAX_BYTES = 15 * 1024 * 1024 
 
