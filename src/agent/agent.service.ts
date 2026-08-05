@@ -1,10 +1,9 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { createHash} from 'crypto';
 import * as bcrypt from 'bcrypt'
 import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { EventsService } from 'src/events/events.service';
+import { hashCode } from 'src/common/hash-code';
 
 @Injectable()
 export class AgentService {
@@ -20,13 +19,12 @@ export class AgentService {
     if (event.createdById !== userId) throw new ForbiddenException("Vous n'êtes pas invité à gerer cet événement.");
 
     const code = await this.generateUniqueCode(); // "AG-XXXXX" unique
-    await this.prisma.agent.create({ data: {...dto, hashCode: this.computeHash(code), eventId: event.id}})
 
     const agent = await this.prisma.agent.create({
       data: {
         firstname : dto.firstname,
         lastname : dto.lastname,
-        hashCode: this.computeHash(code),
+        hashCode: hashCode(code),
         eventId: event.id
       }
     });
@@ -84,13 +82,10 @@ export class AgentService {
     for (let i = 0; i < 5; i++){
       const candidate = randomCode('AG',8); //AG-XXXXXXXX
       const existing = await this.prisma.agent.findUnique({ 
-        where : {hashCode : this.computeHash(candidate)}})
+        where : {hashCode : hashCode(candidate)}})
     
     if (!existing) return candidate
     }
     throw new ForbiddenException('Impossible de générer un code unique après 5 essais.')
-  }
-  private computeHash(code: string): string{
-    return createHash('sha256').update(code).digest('hex');// ⚠️
   }
 }

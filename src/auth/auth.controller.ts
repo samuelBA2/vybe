@@ -11,7 +11,6 @@ import {
 import type { Response, Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-// import { UpdateAuthDto } from './dto/update-auth.dto';
 import { Headers } from '@nestjs/common';
 import { SendPhoneOtpDto } from './dto/send-phone-otp.dto';
 import { VerifyOtpDto } from 'src/auth/dto/verify-otp.dto';
@@ -21,6 +20,7 @@ import { SendEmailOtpDto } from './dto/send-mail-otp.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { LoginAgentDto } from 'src/agent/dto/LoginAgentDto';
 
 // Nom du cookie httpOnly qui transporte le refresh token.
 // path restreint à /auth : le cookie n'est envoyé que sur les routes d'auth.
@@ -67,6 +67,12 @@ export class AuthController {
     setRefreshCookie(res, tokens.refreshToken);
     // Le refresh token ne vit que dans le cookie httpOnly : jamais exposé au JS.
     return { accessToken: tokens.accessToken };
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000} })
+  @Post('login/agent')
+  async loginAgent(@Body() dto: LoginAgentDto){
+    return this.authService.loginAgent(dto)
   }
 
   // Mot de passe oublié : envoi de l'OTP vers le canal du compte.

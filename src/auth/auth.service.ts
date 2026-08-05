@@ -30,6 +30,8 @@ import {
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { LoginAgentDto } from 'src/agent/dto/LoginAgentDto';
+import { hashCode } from 'src/common/hash-code';
 
 // Hash factice comparé quand le compte n'existe pas / n'a pas de mot de passe :
 // aligne le temps de réponse sur celui d'un vrai bcrypt.compare et évite de
@@ -64,6 +66,19 @@ export class AuthService {
     );
 
     return { accessToken, refreshToken };
+  }
+
+  // Methode signToken pour agent 
+  private signAgentToken(agent: {id: string; eventId: string}){
+    const secret = this.config.get<string>('JWT_SECRET');
+    if(!secret) throw new Error('Une erreur est servenue !');
+    return { 
+      accesToken: this.jwt.sign(
+        { sub: agent.id, role: 'AGENT', agentId: agent.id, 
+          eventId: agent.eventId, type: 'access'},
+        { secret, expiresIn: '12h'}, // ⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️ À CHANGER !!!!! CELON LA DATE D'EXPIRATION DE L'EVENEMENT
+      )
+    }
   }
 
   // Détermine si l'identifiant est un email (présence d'un @) ou un téléphone,
@@ -158,6 +173,23 @@ export class AuthService {
       },
     });
     return this.signToken({ sub: user.id, role: user.role });
+  }
+
+  async loginAgent(dto: LoginAgentDto){
+    const agent = await this.prisma.agent.findUnique({
+      where: { hashCode: hashCode(dto.code)},
+    });
+    if (!agent || !agent.active) {
+      throw new UnauthorizedException('Code invalide.');
+    }
+    // Première connexion on horodate usedAt (sans jamais l'écraser).
+    if (!agent.usedAt){
+      await this.prisma.agent.update({
+        where: { id: agent.id },
+        data: { usedAt: new Date()}
+      })
+    }
+    return this.signAgentToken(agent);
   }
 
   // ─── Mot de passe oublié : envoi de l'OTP ─────────────────────────────────────

@@ -36,6 +36,7 @@ describe('AuthService', () => {
   let prisma: {
     user: { findUnique: jest.Mock; update: jest.Mock };
     usedToken: { findUnique: jest.Mock; create: jest.Mock };
+    agent: { findUnique: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
   let jwt: { sign: jest.Mock; verify: jest.Mock };
@@ -49,6 +50,7 @@ describe('AuthService', () => {
     prisma = {
       user: { findUnique: jest.fn(), update: jest.fn() },
       usedToken: { findUnique: jest.fn(), create: jest.fn() },
+      agent: { findUnique: jest.fn(), update: jest.fn() },
       $transaction: jest.fn(),
     };
     jwt = { sign: jest.fn().mockReturnValue('signed-jwt'), verify: jest.fn() };
@@ -300,6 +302,79 @@ describe('AuthService', () => {
       expect(mockedBcrypt.hash).toHaveBeenCalledWith('Nouveau1@', expect.any(Number));
       expect(prisma.$transaction).toHaveBeenCalled();
       expect(res).toHaveProperty('message');
+    });
+  });
+
+  // ─── loginAgent (connexion « en tant qu'agent ») ──────────────────────────────
+
+  describe('loginAgent', () => {
+    const makeAgent = (over: Partial<any> = {}) => ({
+      id: 'agent-1',
+      firstname: 'Ada',
+      lastname: 'Lovelace',
+      hashCode: 'peu-importe',
+      active: true,
+      usedAt: null,
+      eventId: 'event-1',
+      ...over,
+    });
+
+    it('code valide + agent actif (1re connexion) → émet un token et pose usedAt', async () => {
+      prisma.agent.findUnique.mockResolvedValue(makeAgent());
+      prisma.agent.update.mockResolvedValue({});
+
+      const res = await service.loginAgent({ code: 'AG-ABCD2345' });
+
+      // usedAt horodaté, uniquement à la première connexion.
+      expect(prisma.agent.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'agent-1' },
+          data: expect.objectContaining({ usedAt: expect.any(Date) }),
+        }),
+      );
+      // Token émis avec le périmètre événement (role AGENT + eventId).
+      expect(jwt.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: 'agent-1',
+          role: 'AGENT',
+          agentId: 'agent-1',
+          eventId: 'event-1',
+          type: 'access',
+        }),
+        expect.any(Object),
+      );
+      expect(res).toBeTruthy();
+    });
+
+    it('agent révoqué (active=false) → 401, aucun token, aucun usedAt', async () => {
+      prisma.agent.findUnique.mockResolvedValue(makeAgent({ active: false }));
+
+      await expect(
+        service.loginAgent({ code: 'AG-ABCD2345' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.agent.update).not.toHaveBeenCalled();
+      expect(jwt.sign).not.toHaveBeenCalled();
+    });
+
+    it('code inconnu → 401, aucun update', async () => {
+      prisma.agent.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.loginAgent({ code: 'AG-ZZZZ2345' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.agent.update).not.toHaveBeenCalled();
+      expect(jwt.sign).not.toHaveBeenCalled();
+    });
+
+    it('connexion suivante (usedAt déjà posé) → ne réécrit pas usedAt, émet quand même un token', async () => {
+      const firstLogin = new Date('2026-01-01T10:00:00Z');
+      prisma.agent.findUnique.mockResolvedValue(makeAgent({ usedAt: firstLogin }));
+
+      const res = await service.loginAgent({ code: 'AG-ABCD2345' });
+
+      expect(prisma.agent.update).not.toHaveBeenCalled();
+      expect(jwt.sign).toHaveBeenCalled();
+      expect(res).toBeTruthy();
     });
   });
 });
