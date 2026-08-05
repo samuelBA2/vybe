@@ -182,7 +182,7 @@ enum EventCategory {
 }
 
 enum EventStatus {
-  DRAFT
+  DRAFT  //event encours de creation 
   PENDING_REVIEW
   PUBLISHED
   REJECTED

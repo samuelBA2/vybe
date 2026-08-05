@@ -69,14 +69,16 @@ export class AuthService {
   }
 
   // Methode signToken pour agent 
-  private signAgentToken(agent: {id: string; eventId: string}){
+  private signAgentToken(agent: {id: string; eventId: string; event: {endDate: Date }}){
     const secret = this.config.get<string>('JWT_SECRET');
     if(!secret) throw new Error('Une erreur est servenue !');
+
+    const expiresIn = Math.floor((agent.event.endDate.getTime() - Date.now())/ 1000)
     return { 
-      accesToken: this.jwt.sign(
+      accessToken: this.jwt.sign(
         { sub: agent.id, role: 'AGENT', agentId: agent.id, 
           eventId: agent.eventId, type: 'access'},
-        { secret, expiresIn: '12h'}, // ⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️ À CHANGER !!!!! CELON LA DATE D'EXPIRATION DE L'EVENEMENT
+        { secret, expiresIn }, 
       )
     }
   }
@@ -178,9 +180,19 @@ export class AuthService {
   async loginAgent(dto: LoginAgentDto){
     const agent = await this.prisma.agent.findUnique({
       where: { hashCode: hashCode(dto.code)},
+      include: { event: { select: { endDate: true, status: true}}}
     });
     if (!agent || !agent.active) {
       throw new UnauthorizedException('Code invalide.');
+    }
+    const now = Date.now();
+    if (agent.event.endDate.getTime()<= now){
+      throw new UnauthorizedException('Événement terminé, accès agent clôturé.')
+    }
+
+    const isPublished = agent.event.status === $Enums.EventStatus.PUBLISHED;
+    if (!isPublished){
+      throw new UnauthorizedException('Événement introuvable.')
     }
     // Première connexion on horodate usedAt (sans jamais l'écraser).
     if (!agent.usedAt){
