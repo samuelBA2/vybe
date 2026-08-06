@@ -12,6 +12,7 @@ import { SmsService } from 'src/sms/sms.service';
 import { ConfigService } from '@nestjs/config';
 import { OtpService } from 'src/otp/otp.service';
 import { MAX_LOGIN_ATTEMPTS } from 'src/common/constants';
+import { $Enums } from '@prisma/client';
 
 jest.mock('bcrypt');
 
@@ -308,6 +309,7 @@ describe('AuthService', () => {
   // ─── loginAgent (connexion « en tant qu'agent ») ──────────────────────────────
 
   describe('loginAgent', () => {
+    // endDate largement dans le futur par défaut (événement encore en cours).
     const makeAgent = (over: Partial<any> = {}) => ({
       id: 'agent-1',
       firstname: 'Ada',
@@ -316,6 +318,10 @@ describe('AuthService', () => {
       active: true,
       usedAt: null,
       eventId: 'event-1',
+      event: {
+        endDate: new Date(Date.now() + 60 * 60 * 1000), // +1 h
+        status: $Enums.EventStatus.PUBLISHED,
+      },
       ...over,
     });
 
@@ -341,9 +347,35 @@ describe('AuthService', () => {
           eventId: 'event-1',
           type: 'access',
         }),
-        expect.any(Object),
+        // expiry dynamique : secondes restantes jusqu'à Event.endDate (> 0).
+        expect.objectContaining({ expiresIn: expect.any(Number) }),
       );
+      expect(jwt.sign.mock.calls[0][1].expiresIn).toBeGreaterThan(0);
       expect(res).toBeTruthy();
+    });
+
+    it('événement terminé (endDate passée) → 401, aucun token, aucun usedAt', async () => {
+      prisma.agent.findUnique.mockResolvedValue(
+        makeAgent({ event: { endDate: new Date(Date.now() - 1000), status: $Enums.EventStatus.PUBLISHED } }),
+      );
+
+      await expect(
+        service.loginAgent({ code: 'AG-ABCD2345' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.agent.update).not.toHaveBeenCalled();
+      expect(jwt.sign).not.toHaveBeenCalled();
+    });
+
+    it('événement non publié (status ≠ PUBLISHED) → 401, aucun token, aucun usedAt', async () => {
+      prisma.agent.findUnique.mockResolvedValue(
+        makeAgent({ event: { endDate: new Date(Date.now() + 60 * 60 * 1000), status: $Enums.EventStatus.CANCELLED } }),
+      );
+
+      await expect(
+        service.loginAgent({ code: 'AG-ABCD2345' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.agent.update).not.toHaveBeenCalled();
+      expect(jwt.sign).not.toHaveBeenCalled();
     });
 
     it('agent révoqué (active=false) → 401, aucun token, aucun usedAt', async () => {
