@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt'
 import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
@@ -11,7 +11,13 @@ export class AgentService {
 
   async CreatAgent(userId: string, reference : string, dto: CreateAgentDto){
 
-    const event = await this.prisma.event.findUnique({ where: { id: reference } });
+    // Double sécurité : la référence de l'URL et celle du body doivent coïncider.
+    // (le body est déjà trim + uppercase par le DTO ; on normalise l'URL de même)
+    if (dto.eventReferenceId !== reference.trim().toUpperCase()) {
+      throw new BadRequestException("La référence de l'URL et celle du body ne correspondent pas.");
+    }
+
+    const event = await this.prisma.event.findUnique({ where: { reference } });
     // si aucune ligne ne correspont l'evenement n'existe pas 
     if (!event) {throw new NotFoundException('Evenement Introuvable')};
 
