@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { JwtService } from '@nestjs/jwt';
 import { OtpService } from 'src/otp/otp.service';
+import { BCRYPT_ROUNDS } from 'src/common/constants';
 
 const MAX_UPDATES_PER_MONTH = 2;
 
@@ -41,12 +42,28 @@ export class UsersService {
     private readonly otpService: OtpService,
   ) {}
 
-  findAll() {
-    return `This action returns all users`;
-  }
-
-  findOne(id: number) {
-    return `This action returns a #${id} user`;
+  // Profil de l'utilisateur connecté (champs publics uniquement —
+  // jamais le hashedPassword ni les compteurs internes).
+  async findMe(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        firstname: true,
+        lastname: true,
+        avatarUrl: true,
+        role: true,
+        emailVerified: true,
+        phoneVerified: true,
+        createdAt: true,
+      },
+    });
+    if (!user) {
+      throw new NotFoundException('Utilisateur introuvable.');
+    }
+    return user;
   }
 
   async update(userId: string, dto: UpdateUserDto) {
@@ -174,7 +191,7 @@ export class UsersService {
       );
     }
     // Hasher et sauvegarder
-    const newHash = await bcrypt.hash(dto.newPassword, 12);
+    const newHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -232,16 +249,27 @@ export class UsersService {
       );
     }
 
-    //nouvel identifiant déjà pris par un autre compte
+    // Le canal est déterminé par le DTO : newEmail => email, newPhone => téléphone.
+    const isEmailChange = Boolean(dto.newEmail);
     const newIdentifier = (dto.newEmail ?? dto.newPhone) as string;
 
+    // Nouvel identifiant déjà pris par un autre compte -> refus (message générique).
     const alreadyExists = await this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: newIdentifier }, { phone: newIdentifier }],
-      },
+      where: isEmailChange
+        ? { email: newIdentifier }
+        : { phone: newIdentifier },
     });
     if (alreadyExists) {
-      await this.otpService.sendPhoneOtp(newIdentifier);
+      throw new BadRequestException(
+        "Cet identifiant n'est pas disponible, veuillez en choisir un autre.",
+      );
+    }
+
+    // Envoi de l'OTP sur le bon canal : email -> mail, téléphone -> SMS.
+    if (isEmailChange) {
+      await this.otpService.sendLoginEmailOtp(newIdentifier);
+    } else {
+      await this.otpService.sendLoginPhoneOtp(newIdentifier);
     }
 
     //generer le temptoken
@@ -275,14 +303,14 @@ export class UsersService {
       throw new UnauthorizedException('Token invalide ou expiré.');
     }
 
+    // vérifier si c'est bien un token de changement d'identifiant
+    if (payload.type !== 'identifier-change') {
+      throw new ForbiddenException('Type de token non autorisé.');
+    }
+
     //le token appartient à l'utilisateur
     if (payload.sub !== userId) {
       throw new ForbiddenException('Token non autorisé.');
-    }
-
-    // verifier si c'est bien un token de changement d'identifiant
-    if (payload.sub !== userId) {
-      throw new ForbiddenException('Type de token non autorisé.');
     }
 
     //verifier l'otp (lève une exception si le code est invalide ou expiré)
@@ -405,9 +433,5 @@ export class UsersService {
         'Votre compte a été désactivé. Il sera définitivement supprimé dans deux semaines. ' +
         'Vous pouvez revenir en arrière en contactant le support pendant ce délai.',
     };
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} user`;
   }
 }

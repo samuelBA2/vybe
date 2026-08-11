@@ -8,6 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 model User {
@@ -41,6 +42,14 @@ model User {
   // Un compte invalide ne peut plus se connecter mais reste récupérable.
   isValid            Boolean   @default(true)
   deletionRequestedAt DateTime? // date de la demande de suppression (point de départ des 2 semaines)
+
+  // Verrou progressif de connexion par mot de passe.
+  // failedLoginAttempts : compteur de la série en cours (0..5), remis à 0 à chaque verrou et à chaque succès.
+  // loginLockLevel : palier atteint (0 aucun, 1 → 5min, 2 → 1h, 3+ → 12h), ne redescend que sur connexion réussie.
+  // loginLockedUntil : fin du verrou en cours ; null = pas de verrou actif.
+  failedLoginAttempts Int       @default(0)
+  loginLockLevel      Int       @default(0)
+  loginLockedUntil    DateTime?
 }
 
 model UsedToken {
@@ -63,8 +72,8 @@ model EventParticipant {
 }
 
 enum Role {
-  ADMIN
-  AGENT
+  USER   // tout inscrit : self-service (créer événements/agents, encaisser)
+  AGENT  // agent de sécurité : scan des QR codes uniquement
 }
 
 model OtpVerification {
@@ -77,10 +86,15 @@ model OtpVerification {
   // Défini après MAX tentatives échouées, bloque pendant 20 min
   blockedUntil DateTime?
   createdAt DateTime @default(now())
-
   //Null pour l'inscription, renseigné pour la reconnexion
   userId    String?
   user      User?    @relation(fields: [userId], references: [id])
+
+  // Index sur le champ de filtre principal des requêtes OTP (verify, block,
+  // cooldown, persist). Composite [identifier, used] : sert aussi les requêtes
+  // filtrant uniquement sur identifier (préfixe gauche). Évite le full table scan
+  // sur une table qui grossit à chaque tentative de connexion/inscription.
+  @@index([identifier, used])
 }
 
 // Événement
@@ -102,6 +116,7 @@ model Event {
   termsAccepted Boolean      @default(false)
   createdAt     DateTime     @default(now())
   reviewedAt    DateTime?    // date de la décision de modération (validation/refus)
+  totalCapacity Int?         // null = billetterie illimitée ; sinon capacité totale (max 50000)
 
   participants EventParticipant[] 
 
@@ -114,14 +129,34 @@ model EventMedia {
   id        String    @id @default(uuid())
   eventId   String
   event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  url       String
-  fileKey   String    // clé S3/R2
+  url       String?    // secure_url Cloudinary
+  publicId  String?    // public_id Cloudinary (pour delete/transform)
   fileName  String
   mimeType  String
   sizeBytes Int
   mediaType MediaType
   isPoster  Boolean   @default(false) // true pour l'affiche (exactement 1 par événement)
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([eventId])
+  @@index([eventId, isPoster])
+}
+
+model UploadedAsset {
+  id        String        @id @default(uuid())
+  publicId  String        @unique          // = fileKey renvoyé au client
+  url       String
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  mediaType MediaType
+  ownerId   String                          // req.user.sub
+  attached  Boolean       @default(false)   // true quand rattaché à un Event
+  createdAt DateTime      @default(now())
+
+  @@index([attached, createdAt]) // pour le balayage de purge
+  @@index([ownerId])
 }
 
 enum MediaType {
@@ -161,7 +196,7 @@ model TicketCategory {
   price        Float
   totalStock   Int?    // null = stock illimité
   ticketDesignUrl String // URL de l'image de design du billet
-  soldCount    Int     @default(0)
+  soldCount    Int     @default(0) //
   maxPerOrder  Int     @default(10) // Max billets par commande
   benefits     String?
   
@@ -172,8 +207,8 @@ model TicketCategory {
 // Commande (1 commande = N billets)
 model Order {
   id               String      @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
   ticketCategoryId String
   ticketCategory   TicketCategory @relation(fields: [ticketCategoryId], references: [id])
   quantity         Int
@@ -207,7 +242,7 @@ model Ticket {
   scannedAt        DateTime?
   scannedByAgentId String?
 
-  expiresAt         DateTime
+  expiresAt        DateTime
   pdfUrl           String?
   createdAt        DateTime  @default(now())
 

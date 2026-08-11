@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -11,24 +13,40 @@ import { OtpModule } from './otp/otp.module';
 import { SmsModule } from './sms/sms.module';
 import { MailModule } from './mail/mail.module';
 import { EventsModule } from './events/events.module';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Rate limiting global : 20 requêtes/minute par IP (défaut).
+    // Les routes sensibles (envoi OTP, login) ont des limites plus serrées via @Throttle.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
     AuthModule,
-    UsersModule,
     PrismaModule,
-    JwtModule.register({
-      secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: '1h' },
-    }),
+    ScheduleModule.forRoot(),
+    JwtModule.registerAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (configService: ConfigService) => ({
+    secret: configService.get<string>('JWT_SECRET'),
+    signOptions: { expiresIn: '1h' },
+  }),
+}),
     UsersModule,
     OtpModule,
     SmsModule,
     MailModule,
     EventsModule,
+    CloudinaryModule,
+    UploadsModule,
   ],
-  controllers: [],
-  providers: [],
+  controllers: [AppController],
+  providers: [
+    AppService,
+    // Applique le rate limiting à toutes les routes de l'application.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

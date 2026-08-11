@@ -5,12 +5,12 @@ import {
   Post,
   Body,
   Patch,
-  Param,
   Delete,
   UseGuards,
   Req,
   Headers,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -23,19 +23,12 @@ import { VerifyAccountDeletionDto } from './dto/verify-account-deletion.dto';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  // @Post()
-  // create(@Body() createUserDto: CreateUserDto) {
-  //   return this.usersService.creat(createUserDto);
-  // }
-
-  @Get()
-  findAll() {
-    return this.usersService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(+id);
+  // Profil de l'utilisateur connecté — utilisé par le frontend pour
+  // l'hydratation de session.
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  me(@Req() req) {
+    return this.usersService.findMe(req.user.sub);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -47,15 +40,18 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @Patch('me/password')
   async changePassword(@Req() req, @Body() dto: ChangePasswordDto) {
-    return this.usersService.changePassword(req.user.id, dto);
+    return this.usersService.changePassword(req.user.sub, dto);
   }
 
+  // Déclenche un envoi d'OTP : limite serrée contre le bombing SMS/email.
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @UseGuards(JwtAuthGuard)
   @Patch('me/identifier')
   async requestIdentifierChange(@Req() req, @Body() dto: ChangeIdentifierDto) {
-    return this.usersService.requestIdentifierChange(req.user.id, dto);
+    return this.usersService.requestIdentifierChange(req.user.sub, dto);
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @UseGuards(JwtAuthGuard)
   @Patch('me/identifier/verify')
   async verifyIdentifierChange(
@@ -67,13 +63,14 @@ export class UsersController {
       throw new BadRequestException('Token temporaire manquant.');
     }
     return this.usersService.verifyIdentifierChange(
-      req.user.id,
+      req.user.sub,
       dto,
       tempToken,
     );
   }
 
   // Étape 1 : demande de suppression → envoi d'un code de sécurité (OTP)
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @UseGuards(JwtAuthGuard)
   @Delete('me')
   async requestAccountDeletion(@Req() req) {
@@ -81,6 +78,7 @@ export class UsersController {
   }
 
   // Étape 2 : confirmation via OTP + token temporaire → soft delete
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @UseGuards(JwtAuthGuard)
   @Post('me/delete/verify')
   async verifyAccountDeletion(
@@ -96,10 +94,5 @@ export class UsersController {
       dto.otp,
       tempToken,
     );
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(+id);
   }
 }

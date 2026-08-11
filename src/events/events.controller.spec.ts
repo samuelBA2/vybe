@@ -4,15 +4,17 @@ describe('EventsController', () => {
   let controller: EventsController;
   let events: any;
   let moderation: any;
+  let cloudinary: any;
 
   beforeEach(() => {
     events = { createEvent: jest.fn().mockResolvedValue({ eventId: 'evt-1' }) };
     moderation = { moderate: jest.fn().mockResolvedValue({ message: 'ok' }) };
-    controller = new EventsController(events, moderation);
+    cloudinary = { uploadImage: jest.fn().mockResolvedValue({ secure_url: 'u', public_id: 'p' }) };
+    controller = new EventsController(events, moderation, cloudinary);
   });
 
   it('create délègue à EventsService avec req.user.sub', async () => {
-    const req = { user: { sub: 'user-1', role: 'ADMIN' } };
+    const req = { user: { sub: 'user-1', role: 'USER' } };
     await controller.create(req as any, { title: 'x' } as any);
     expect(events.createEvent).toHaveBeenCalledWith('user-1', { title: 'x' });
   });

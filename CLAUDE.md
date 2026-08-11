@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Vybe is a NestJS backend (TypeScript) for an event-ticketing platform: user auth (email/phone OTP), profile management, events, ticketing/orders, and security agents who scan QR tickets. The schema (`prisma/schema.prisma`) is far ahead of the implemented modules — only auth, users, otp, sms, and mail are currently built out. Code comments and error messages are written in French.
+Vybe is a NestJS backend (TypeScript) for an event-ticketing platform: user auth (email/phone OTP), profile management, events (creation + moderation), ticketing/orders, and security agents who scan QR tickets. Code comments and error messages are written in French.
 
 ## Commands
 
@@ -32,19 +32,20 @@ npx prisma migrate dev --name <name>   # create/apply a migration
 npx prisma generate                     # regenerate the Prisma client
 ```
 
-The Prisma client is generated to `generated/` (see `generated/` dir) — datasource is Postgres via `DATABASE_URL`.
+The Prisma client is generated to `node_modules/@prisma/client` — datasource is Postgres via `DATABASE_URL`. Enums are imported via `import { $Enums } from '@prisma/client'`.
 
 ## Architecture
 
 ### Module layout
-Standard NestJS feature modules under `src/`: `auth`, `users`, `otp`, `sms`, `mail`, `prisma`. Each follows the Nest CLI generator shape (module/controller/service/dto/entities), though some generated files (`create-*.dto.ts`, `update-auth.dto.ts`, etc.) have been removed where the corresponding CRUD endpoints aren't used — don't recreate them.
+Standard NestJS feature modules under `src/`: `auth`, `users`, `otp`, `sms`, `mail`, `prisma`, `events`. Each follows the Nest CLI generator shape (module/controller/service/dto/entities), though some generated files (`create-*.dto.ts`, `update-auth.dto.ts`, etc.) have been removed where the corresponding CRUD endpoints aren't used — don't recreate them.
 
 - `PrismaModule` / `PrismaService` — global-ish Prisma client wrapper (connects/disconnects on module lifecycle). Injected wherever DB access is needed.
 - `OtpModule` (`src/otp`) — central OTP generation/verification logic, used by both `auth` and `users`. Depends on `SmsModule` and `MailModule` for delivery.
 - `SmsModule`/`SmsService` — Twilio wrapper for sending SMS OTPs (`TWILIO_*` env vars).
-- `MailModule`/`MailService` — SendGrid wrapper for sending email OTPs (`SENDGRID_*` env vars).
-- `AuthModule` — registration/login flows, JWT issuance, `JwtStrategy` (passport-jwt) and `JwtAuthGuard`.
+- `MailModule`/`MailService` — SendGrid wrapper for sending email OTPs (`SENDGRID_*` env vars). Also handles event moderation/decision emails (`sendEventModerationEmail`, `sendEventDecisionEmail`).
+- `AuthModule` — registration/login flows, JWT issuance, `JwtStrategy` (passport-jwt) and `JwtAuthGuard`. Exports `JwtModule` and `JwtAuthGuard` for reuse by other modules.
 - `UsersModule` — authenticated profile operations (update profile, change password, change email/phone).
+- `EventsModule` (`src/events`) — event creation with moderation workflow. Two services: `EventsService` (validation + transactional creation) and `EventModerationService` (magic-link tokens + approve/reject). See "Event creation and moderation flow" below.
 
 ### Auth/registration flow (multi-step, token-chained)
 Registration is OTP-first and uses short-lived JWTs as state carriers between steps (no server-side session):
@@ -57,8 +58,10 @@ Login (`/auth/login/email`, `/auth/login/phone`) compares bcrypt hashes against 
 
 `OtpService.sendEmailOtp`/`sendPhoneOtp` deliberately send a generic "someone tried to register with your identifier" message (without revealing account existence) when the identifier is already registered, instead of issuing a real OTP.
 
-### Authenticated routes
-`JwtAuthGuard` (in `src/auth/guards/`) manually verifies the bearer token via `JwtService` and attaches `{ id, role }` to `request.user` — apply with `@UseGuards(JwtAuthGuard)`. `UsersController`'s `me`/`me/password`/`me/identifier` routes use `req.user.id`.
+### Authenticated routes and authorization
+`JwtAuthGuard` (in `src/auth/guards/`) manually verifies the bearer token via `JwtService` and attaches `{ sub, role }` to `request.user` — apply with `@UseGuards(JwtAuthGuard)`. `UsersController`'s `me`/`me/password`/`me/identifier` routes use `req.user.id` or `req.user.sub`.
+
+`RolesGuard` (`src/auth/guards/roles.guard.ts`) + `@Roles('ADMIN')` decorator (`src/auth/decorators/roles.decorator.ts`) — checks `request.user.role` against required roles. Used on `POST /events` to restrict creation to ADMIN. Apply with `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...)`. Currently all users are created with role `ADMIN`.
 
 ### Profile update limits
 `UsersService.update` enforces a max of 2 profile edits per calendar month, tracked via `profileUpdateCount`/`profileUpdateMonth`/`profileUpdateYear` on `User`. Usernames are checked against a reserved-word list loaded from `src/text/banned_usernames.txt` (path differs between dev `src/...` and prod `dist/...`, copied as an asset per `nest-cli.json`).
@@ -73,8 +76,28 @@ Two authenticated steps (`JwtAuthGuard`), modeled on the identifier-change flow:
 
 Soft-deleted accounts (`isValid = false`) are rejected at login (`loginEmail`/`loginPhone` and the OTP-verify steps in `auth.service`). The OTP message (email HTML reuses `MailService`'s design via `sendAccountDeletionOtp`; SMS reuses the same text) warns the user the account stays stored for two weeks. Automatic purge after 14 days and a recovery endpoint are not yet implemented.
 
+### Event creation and moderation flow
+Full event creation in a single `POST /events` (authenticated, `ADMIN` only). The request includes event data + media (with exactly one poster `isPoster: true`) + 1–4 ticket categories (named freely, unlimited stock, each with a design URL). The client uploads files elsewhere and provides URLs — no upload pipeline in the backend.
+
+**Workflow:**
+1. `POST /events` — `EventsService.createEvent` validates business rules (dates in future, end > start, purchaseDeadline ≤ start, termsAccepted = true, exactly 1 poster, 1–4 ticket categories), creates `Event` (status `PENDING_REVIEW`) + `EventMedia[]` + `TicketCategory[]` in a single Prisma `create` with nested writes, then sends a moderation email to `VYBE_TEAM_EMAIL` with all event details, poster image, ticket categories, and magic links (Approve/Reject).
+2. `GET /events/moderate?token=&decision=` (public) — returns an HTML confirmation page with a button that POSTs (prevents accidental validation by email client link prefetching).
+3. `POST /events/moderate` (public, body `{ token, decision }`) — `EventModerationService.moderate` verifies the JWT token (`type: 'event-moderation'`, 7-day expiry), checks anti-replay via `UsedToken.jti`, validates the event is still `PENDING_REVIEW`, then in a `$transaction`: updates status to `PUBLISHED` or `REJECTED` + creates `UsedToken`. Notifies the creator by email if they have one.
+4. `GET /events/:id` (public) — returns the full event with media, ticket categories, and creator info.
+
 ### Config
-`ConfigModule` is global. Key env vars: `DATABASE_URL`, `JWT_SECRET`, `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`, `SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`/`SENDGRID_FROM_NAME`, `PORT`.
+`ConfigModule` is global. Key env vars: `DATABASE_URL`, `JWT_SECRET`, `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`, `SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`/`SENDGRID_FROM_NAME`, `PORT`, `VYBE_TEAM_EMAIL` (moderation email recipient, fallback `SENDGRID_FROM_EMAIL`), `API_BASE_URL` (base URL for magic links, e.g. `http://localhost:3000`).
+
+## Testing notes
+Jest config in `package.json` includes `moduleNameMapper: { "^src/(.*)$": "<rootDir>/$1" }` to resolve the codebase's `src/...` absolute imports. Several auto-generated spec files (`auth.controller.spec`, `auth.service.spec`, `users.controller.spec`, `users.service.spec`, `sms.controller.spec`, `sms.service.spec`) are broken (missing DI providers in `TestingModule`) — these are pre-existing and unrelated to the events module.
 
 ## Linting notes
 `@typescript-eslint/no-explicit-any` is off, `no-floating-promises` and `no-unsafe-argument` are warnings (not errors) per `eslint.config.mjs`.
+
+## TODO avant mise en production
+
+- **Scan antivirus des PDF uploadés** — `POST /uploads` (`UploadsService`) accepte `application/pdf` (`ALLOWED_MIME` dans `src/common/constants.ts`) mais NE scanne PAS encore les PDF infectés/piégés. À implémenter avant la prod. Options évaluées : ClamAV/`clamscan` (vrai AV, nécessite un démon `clamd` — pas fourni par Render/Neon par défaut) ; scan heuristique sans infra (détecter `/JavaScript`, `/JS`, `/Launch`, `/OpenAction`, `/EmbeddedFile` dans le buffer) ; API externe (VirusTotal, expose le fichier à un tiers). Décision reportée. **Rappeler ce point à l'utilisateur au moment de préparer la prod.**
+
+## Instructions
+
+- Ne pas ajouter "Co-Authored-By" dans les messages de commit git.

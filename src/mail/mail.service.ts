@@ -19,8 +19,14 @@ export interface ModerationEmailParams {
   dressCode: string | null;
   purchaseDeadline: Date;
   creatorLabel: string;
-  posterUrl: string;
-  ticketCategories: { name: string; price: number; ticketDesignUrl: string }[];
+  posterUrl: string | null;
+  totalCapacity: number | null;
+  ticketCategories: {
+    name: string;
+    price: number;
+    ticketDesignUrl: string;
+    totalStock: number | null;
+  }[];
   approveUrl: string;
   rejectUrl: string;
 }
@@ -29,9 +35,8 @@ export interface ModerationEmailParams {
 export class MailService {
   private logger = new Logger(MailService.name);
 
-  constructor() {
-    sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
-    this;
+  constructor(private readonly config: ConfigService) {
+    sgMail.setApiKey(this.config.get<string>('SENDGRID_API_KEY')!);
   }
 
   async sendOtp(to: string, otp: string, expiresInMinutes = 10): Promise<void> {
@@ -314,6 +319,7 @@ export class MailService {
         <tr>
           <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.name}</td>
           <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.price} USD</td>
+          <td style="padding:8px 12px;color:#ddd;border-bottom:1px solid #222;">${t.totalStock == null ? 'Illimité' : t.totalStock}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #222;">
             <img src="${t.ticketDesignUrl}" alt="design ${t.name}" width="80" style="border-radius:6px;"/>
           </td>
@@ -349,7 +355,7 @@ export class MailService {
           <h1 style="color:#fff;margin:0;font-size:22px;">Événement à modérer</h1>
         </td></tr>
         <tr><td style="padding:24px 32px;">
-          <img src="${params.posterUrl}" alt="affiche" width="536" style="width:100%;border-radius:12px;margin-bottom:24px;"/>
+          ${params.posterUrl ? `<img src="${params.posterUrl}" alt="affiche" width="536" style="width:100%;border-radius:12px;margin-bottom:24px;"/>` : ''}
           <h2 style="color:#fff;margin:0 0 16px;">${params.title}</h2>
           <p style="color:#aaa;line-height:1.6;">${params.description}</p>
           <table width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;background:#1a1a1a;border-radius:10px;">
@@ -360,6 +366,7 @@ export class MailService {
             ${row('Catégorie', params.category)}
             ${row('Dress code', params.dressCode || '—')}
             ${row('Limite achat', fmt(params.purchaseDeadline))}
+            ${row('Billetterie', params.totalCapacity == null ? 'Illimitée' : `Limitée — ${params.totalCapacity} billets`)}
             ${row('Créateur', params.creatorLabel)}
           </table>
           <h3 style="color:#fff;margin:24px 0 8px;">Catégories de billets</h3>
@@ -367,6 +374,7 @@ export class MailService {
             <tr>
               <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Nom</th>
               <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Prix</th>
+              <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Stock</th>
               <th style="text-align:left;padding:8px 12px;color:#888;font-size:12px;">Design</th>
             </tr>
             ${ticketsRows}
