@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt'
 import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
@@ -79,9 +79,45 @@ export class AgentService {
       where: { id: agentId},
       data: { active: false}
     })
-
-
   }
+
+  async scan(eventId: string, agentId: string, qrToken: string){
+    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    if (!agent || !agent.active) throw new ForbiddenException('Agent révoqué ou inexistant.')
+    
+    const ticket = await this.prisma.ticket.findUnique({ where: { qrToken },
+    include: { ticketCategory: true, order: { include: { user: true } } },
+  });
+    if (!ticket) throw new NotFoundException('Billet introuvable.');
+
+    if (ticket.ticketCategory.eventId !== eventId) throw new ForbiddenException("Ce billet n'appartient pas à votre événement.")
+
+    if (ticket.expiresAt < new Date()) throw new ForbiddenException('Billet expiré')
+
+    if (ticket.qrStatus === 'CANCELLED') throw new ForbiddenException('Billet déjà annulé.')
+    if (ticket.qrStatus === 'USED') throw new ConflictException (`Billet déjà scanné le ${ticket.scannedAt?.toISOString()}.`)
+
+    const res = await this.prisma.ticket.updateMany({
+      where: { qrToken, qrStatus: 'UNUSED' },
+      data: { qrStatus: 'USED', scannedAt: new Date(), scannedByAgentId: agentId },
+    });
+    if (res.count !== 1) throw new ConflictException('Billet déjà scanné.');
+
+    // firstname/lastname sont nullable : on filtre les valeurs manquantes
+    // pour éviter un affichage "null null" à l'entrée.
+    const holderName =
+      [ticket.order.user.firstname, ticket.order.user.lastname]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || 'Porteur inconnu';
+
+    return {
+      status: "Billet valide !",
+      category: ticket.ticketCategory.name,
+      holderName,
+    }
+  }
+
 
 
   private async generateUniqueCode(): Promise<string>{

@@ -4,6 +4,7 @@ import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator'
 import { AgentService } from './agent.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
+import { ScanDto } from './dto/ScanDto';
 
 @Controller()//pas de préfixe : chemains complets sur chaque route
 export class AgentController {
@@ -35,5 +36,13 @@ export class AgentController {
   @Patch('agents/:id/deactivate')
   async deactivate(@Req() req, @Param('id') id: string) {
     return this.agentService.deleteAgent(req.user.sub, id);
+  }
+
+   //Scanne qrcode 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('AGENT')
+  @Post('agents/scan')
+  async scan(@Req() req, @Body() dto: ScanDto){
+    return this.agentService.scan(req.user.eventId, req.user.agentId, dto.qrToken)
   }
 }

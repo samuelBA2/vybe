@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ describe('AgentService', () => {
   let prisma: {
     event: { findUnique: jest.Mock };
     agent: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock; update: jest.Mock };
+    ticket: { findUnique: jest.Mock; updateMany: jest.Mock };
   };
 
   beforeEach(() => {
@@ -23,6 +25,7 @@ describe('AgentService', () => {
         findMany: jest.fn(),
         update: jest.fn(),
       },
+      ticket: { findUnique: jest.fn(), updateMany: jest.fn() },
     };
     service = new AgentService(prisma as unknown as PrismaService);
   });
@@ -139,6 +142,105 @@ describe('AgentService', () => {
         where: { id: 'agent-1' },
         data: { active: false },
       });
+    });
+  });
+
+  // ─── scan (Phase 4 : scan isolé) ───────────────────────────────────────────────
+  describe('scan', () => {
+    // Agent actif par défaut ; les tests le surchargent au besoin.
+    const activeAgent = { id: 'agent-1', active: true };
+    // Billet valide par défaut : UNUSED, non expiré, rattaché à event-1.
+    const ticket = (over: Partial<any> = {}) => ({
+      qrToken: 'qr-1',
+      qrStatus: 'UNUSED',
+      expiresAt: new Date(Date.now() + 3_600_000), // +1h
+      scannedAt: null,
+      ticketCategory: { eventId: 'event-1', name: 'VIP' },
+      order: { user: { firstname: 'Ada', lastname: 'Lovelace' } },
+      ...over,
+    });
+
+    it('agent révoqué (active=false) → 403, ne touche pas au billet', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'agent-1', active: false });
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('agent inexistant → 403', async () => {
+      prisma.agent.findUnique.mockResolvedValue(null);
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('billet introuvable → 404', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(null);
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it("ISOLATION : billet d'un autre événement → 403, aucune transition", async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(ticket({ ticketCategory: { eventId: 'autre-event', name: 'VIP' } }));
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('billet expiré → 403', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(ticket({ expiresAt: new Date(Date.now() - 1000) }));
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('billet annulé (CANCELLED) → 403', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(ticket({ qrStatus: 'CANCELLED' }));
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('billet déjà scanné (USED) → 409', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(
+        ticket({ qrStatus: 'USED', scannedAt: new Date('2026-08-11T10:00:00.000Z') }),
+      );
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('UNUSED → transition atomique USED + infos d’accès', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(ticket());
+      prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
+
+      const res = await service.scan('event-1', 'agent-1', 'qr-1');
+
+      // Le verrou anti-double-scan : where filtre sur qrStatus UNUSED, data pose l'agent.
+      expect(prisma.ticket.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { qrToken: 'qr-1', qrStatus: 'UNUSED' },
+          data: expect.objectContaining({ qrStatus: 'USED', scannedByAgentId: 'agent-1' }),
+        }),
+      );
+      expect(res).toEqual(
+        expect.objectContaining({ category: 'VIP', holderName: 'Ada Lovelace' }),
+      );
+    });
+
+    it('CONCURRENCE : updateMany count=0 (course perdue) → 409', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(ticket()); // vu UNUSED au pré-contrôle…
+      prisma.ticket.updateMany.mockResolvedValue({ count: 0 }); // …mais un autre scan a gagné
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('porteur sans nom → holderName "Porteur inconnu"', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(
+        ticket({ order: { user: { firstname: null, lastname: null } } }),
+      );
+      prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
+      const res = await service.scan('event-1', 'agent-1', 'qr-1');
+      expect(res.holderName).toBe('Porteur inconnu');
     });
   });
 });
