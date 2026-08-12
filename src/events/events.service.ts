@@ -88,8 +88,8 @@ export class EventsService {
     if (end.getTime() <= start.getTime()) {
       throw new BadRequestException('La date de fin doit être postérieure à la date de début.',);
     }
-    if (deadline.getTime() > start.getTime()) {
-      throw new BadRequestException("La date limite d'achat ne peut pas dépasser la date de début.",);
+    if (deadline.getTime() > end.getTime()) {
+      throw new BadRequestException("La date limite d'achat ne peut pas dépasser la date de fin de l'événement.",);
     }
     if (dto.termsAccepted !== true) {
       throw new BadRequestException('Vous devez accepter les conditions.');
