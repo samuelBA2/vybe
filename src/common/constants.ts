@@ -20,6 +20,12 @@ export const LOGIN_LOCK_DURATIONS_MS = [
 // dictable au téléphone sans confusion. 32 caractères.
 export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789';
 
+// ─── Agents de sécurité ───────────────────────────────────────────────────────
+// Nombre maximum d'agents ACTIFS par événement. Désactiver un agent
+// (active=false) libère un slot. Le frontend applique la même limite pour
+// désactiver le bouton « + ».
+export const MAX_AGENTS_PER_EVENT = 5;
+
 // ─── Upload de médias
 export const MAX_BYTES = 15 * 1024 * 1024 
 

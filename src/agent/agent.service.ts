@@ -4,6 +4,7 @@ import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
+import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
 
 @Injectable()
 export class AgentService {
@@ -23,6 +24,13 @@ export class AgentService {
 
     // Seul le créateur de l'événement peut lui ajouter des agents.
     if (event.createdById !== userId) throw new ForbiddenException("Vous n'êtes pas invité à gerer cet événement.");
+
+    // Limite d'agents ACTIFS par événement : révoquer un agent (active=false)
+    // libère un slot. Aligné sur le compteur de l'UI.
+    const agentCount = await this.prisma.agent.count({ where: { eventId: event.id, active: true } });
+    if (agentCount >= MAX_AGENTS_PER_EVENT) {
+      throw new ConflictException(`Limite de ${MAX_AGENTS_PER_EVENT} agents atteinte pour cet événement.`);
+    }
 
     const code = await this.generateUniqueCode(); // "AG-XXXXX" unique
 
@@ -112,7 +120,7 @@ export class AgentService {
         .trim() || 'Porteur inconnu';
 
     return {
-      status: "Billet valide !",
+      status: "Billet validé !",
       category: ticket.ticketCategory.name,
       holderName,
     }

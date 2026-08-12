@@ -7,12 +7,13 @@ import {
 import { AgentService } from './agent.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
+import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
 
 describe('AgentService', () => {
   let service: AgentService;
   let prisma: {
     event: { findUnique: jest.Mock };
-    agent: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock; update: jest.Mock };
+    agent: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock; update: jest.Mock; count: jest.Mock };
     ticket: { findUnique: jest.Mock; updateMany: jest.Mock };
   };
 
@@ -24,6 +25,7 @@ describe('AgentService', () => {
         create: jest.fn(),
         findMany: jest.fn(),
         update: jest.fn(),
+        count: jest.fn(),
       },
       ticket: { findUnique: jest.fn(), updateMany: jest.fn() },
     };
@@ -71,8 +73,19 @@ describe('AgentService', () => {
       expect(prisma.agent.create).not.toHaveBeenCalled();
     });
 
+    it('événement plein (limite atteinte) → 409, aucune création', async () => {
+      prisma.event.findUnique.mockResolvedValue({ id: 'event-1', reference: 'VYBE-8JGBLV', createdById: 'user-1' });
+      prisma.agent.count.mockResolvedValue(MAX_AGENTS_PER_EVENT);
+      await expect(
+        service.CreatAgent('user-1', 'VYBE-8JGBLV', dto()),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.agent.count).toHaveBeenCalledWith({ where: { eventId: 'event-1', active: true } });
+      expect(prisma.agent.create).not.toHaveBeenCalled();
+    });
+
     it('créateur + références égales → crée l’agent et renvoie le code AG- en clair', async () => {
       prisma.event.findUnique.mockResolvedValue({ id: 'event-1', reference: 'VYBE-8JGBLV', createdById: 'user-1' });
+      prisma.agent.count.mockResolvedValue(0); // événement pas encore plein
       prisma.agent.findUnique.mockResolvedValue(null); // code unique du 1er coup
       prisma.agent.create.mockImplementation(({ data }: any) =>
         Promise.resolve({ id: 'agent-1', firstname: data.firstname, lastname: data.lastname }),
