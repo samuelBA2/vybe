@@ -38,7 +38,12 @@ export const ALLOWED_MIME = new Set<string>([
   'application/pdf',
 ]);
 
-// Mappagr d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
+// ─── Billetterie / commandes ──────────────────────────────────────────────────
+// Commission Vybe prélevée sur chaque commande, déduite du montant reversé à
+// l'organisateur (organizerAmount = totalAmount − platformFee).
+export const PLATFORM_FEE_RATE = 0.15 // 15%
+
+// Mappage d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
 export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
   if (mime.startsWith('image/')) return 'IMAGE';
   if (mime === 'application/pdf') return 'DOCUMENT';
