@@ -9,6 +9,8 @@ import {
   UseGuards,
   Req,
   Headers,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { UsersService } from './users.service';
@@ -18,6 +20,8 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { ChangeIdentifierDto } from './dto/change-identifier.dto';
 import { VerifyIdentifierDto } from './dto/verify-identifier.dto';
 import { VerifyAccountDeletionDto } from './dto/verify-account-deletion.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { AVATAR_MAX_BYTES } from 'src/common/constants';
 
 @Controller('users')
 export class UsersController {
@@ -67,6 +71,14 @@ export class UsersController {
       dto,
       tempToken,
     );
+  }
+
+  // Changement de l'avatar 
+  @Post('me/avatar')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: AVATAR_MAX_BYTES}}))
+  async changeAvatar(@UploadedFile() file: Express.Multer.File, @Req() req){
+    return this.usersService.changeAvatar(req.user.sub, file)
   }
 
   // Étape 1 : demande de suppression → envoi d'un code de sécurité (OTP)

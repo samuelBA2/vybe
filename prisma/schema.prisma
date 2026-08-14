@@ -19,6 +19,7 @@ model User {
   firstname  String?
   lastname   String?
   avatarUrl  String?
+  avatarPublicId String?
   role       Role
   emailVerified Boolean @default(false)
   phoneVerified Boolean @default(false)
