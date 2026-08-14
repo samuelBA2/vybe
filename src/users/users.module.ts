@@ -6,6 +6,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from 'src/auth/auth.module';
 import { OtpModule } from 'src/otp/otp.module';
 import { JwtModule } from '@nestjs/jwt';
+import { CloudinaryModule } from 'src/cloudinary/cloudinary.module';
 
 @Module({
   controllers: [UsersController],
@@ -14,6 +15,7 @@ import { JwtModule } from '@nestjs/jwt';
     PrismaModule,
     AuthModule,
     OtpModule,
+    CloudinaryModule,
     JwtModule.register({ secret: process.env.JWT_SECRET }),
   ],
   exports: [UsersService],
