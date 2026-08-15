@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { MailService } from '../mail/mail.service';
-import { CreateContactDto } from './dto/create-contact.dto';
+import { CreateContactDto, CONTACT_REASON_LABELS } from './dto/create-contact.dto';
 
 @Injectable()
 export class ContactService {
@@ -13,7 +13,7 @@ export class ContactService {
   async send(dto: CreateContactDto): Promise<void> {
     await this.mail.sendContactMessage({
       fromEmail: dto.email,
-      reason: dto.reason,
+      reason: CONTACT_REASON_LABELS[dto.reason],
       subject: dto.subject,
       message: dto.message,
     });

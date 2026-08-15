@@ -20,23 +20,26 @@ export class MailController {
   //   return this.mailService.create(createMailDto);
   // }
 
-  @Get()
-  findAll() {
-    return this.mailService.findAll();
-  }
+  // Scaffold CRUD généré (non utilisé) : MailService n'expose pas findAll /
+  // findOne / update / remove — ce module ne fait qu'ENVOYER des mails. Routes
+  // laissées en commentaire pour ne pas exposer d'endpoints morts.
+  // @Get()
+  // findAll() {
+  //   return this.mailService.findAll();
+  // }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.mailService.findOne(+id);
-  }
+  // @Get(':id')
+  // findOne(@Param('id') id: string) {
+  //   return this.mailService.findOne(+id);
+  // }
 
   // @Patch(':id')
   // update(@Param('id') id: string, @Body() updateMailDto: UpdateMailDto) {
   //   return this.mailService.update(+id, updateMailDto);
   // }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.mailService.remove(+id);
-  }
+  // @Delete(':id')
+  // remove(@Param('id') id: string) {
+  //   return this.mailService.remove(+id);
+  // }
 }
