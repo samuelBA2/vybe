@@ -19,6 +19,7 @@ model User {
   firstname  String?
   lastname   String?
   avatarUrl  String?
+  avatarPublicId String?
   role       Role
   emailVerified Boolean @default(false)
   phoneVerified Boolean @default(false)
@@ -248,6 +249,7 @@ model Ticket {
 
   expiresAt        DateTime
   pdfUrl           String?
+  ticketImageUrl   String?   // URL Cloudinary du PNG composé (design + QR + ruban de catégorie)
   createdAt        DateTime  @default(now())
 
   @@index([qrToken])   // Index pour les lookups rapides de scan
