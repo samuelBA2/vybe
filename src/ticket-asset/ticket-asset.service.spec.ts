@@ -61,4 +61,59 @@ describe('TicketAssetService.buildTicketPdf', () => {
     expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
   });
 });
+describe('TicketAssetService.generateAssetsForOrder', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => { global.fetch = originalFetch; });
+
+  const evt = { category: 'FESTIVAL', title: 'Neon Nights', startDate: new Date('2026-06-27T22:00:00') };
+
+  function buildService(overrides: { rawRejectsForTicket?: string } = {}) {
+    const prisma = {
+      ticket: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 't1', qrToken: 'q1', ticketCategoryId: 'c1', ticketCategory: { name: 'VIP', ticketDesignUrl: 'https://d/vip.png', event: evt } },
+          { id: 't2', qrToken: 'q2', ticketCategoryId: 'c1', ticketCategory: { name: 'VIP', ticketDesignUrl: 'https://d/vip.png', event: evt } },
+          { id: 't3', qrToken: 'q3', ticketCategoryId: 'c2', ticketCategory: { name: 'Standard', ticketDesignUrl: 'https://d/std.png', event: evt } },
+        ]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    } as any;
+    const cloudinary = {
+      uploadBuffer: jest.fn().mockResolvedValue({ secure_url: 'https://cdn/img.png' }),
+      uploadRawBuffer: jest.fn().mockImplementation((_b: Buffer, _f: string, name: string) => {
+        if (overrides.rawRejectsForTicket && name.includes(overrides.rawRejectsForTicket)) {
+          return Promise.reject(new Error('upload raw KO'));
+        }
+        return Promise.resolve({ secure_url: 'https://cdn/doc.pdf' });
+      }),
+    } as any;
+    const service = new TicketAssetService(prisma, cloudinary);
+    jest.spyOn(service, 'buildTicketImage').mockResolvedValue(Buffer.from('PNG'));
+    jest.spyOn(service, 'buildTicketPdf').mockResolvedValue(Buffer.from('%PDF'));
+    return { service, prisma };
+  }
+
+  it('télécharge le design une seule fois par catégorie et met à jour chaque billet', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) });
+    global.fetch = fetchMock as any;
+    const { service, prisma } = buildService();
+
+    await service.generateAssetsForOrder('order-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // 2 catégories, 3 billets
+    expect(prisma.ticket.update).toHaveBeenCalledTimes(3);
+    expect(prisma.ticket.update).toHaveBeenCalledWith({
+      where: { id: 't1' },
+      data: { ticketImageUrl: 'https://cdn/img.png', pdfUrl: 'https://cdn/doc.pdf' },
+    });
+  });
+
+  it('best-effort : l\'échec d\'un billet n\'empêche pas les autres et ne throw pas', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }) as any;
+    const { service, prisma } = buildService({ rawRejectsForTicket: 't1' });
+
+    await expect(service.generateAssetsForOrder('order-1')).resolves.toBeUndefined();
+    expect(prisma.ticket.update).toHaveBeenCalledTimes(2);
+  });
+});
 });

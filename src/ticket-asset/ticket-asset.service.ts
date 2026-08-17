@@ -4,6 +4,7 @@ import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
+import { CloudinaryFolder } from 'src/cloudinary/cloudinary.folder';
 
 export type TicketFields = {
     qrToken: string;
@@ -26,6 +27,63 @@ function escapeXml(s: string): string {
             private readonly prisma: PrismaService,
             private readonly cloudinary: CloudinaryService,
         ) {}
+
+        private dateLabel(d: Date): string {
+            const s = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' });
+            return s.charAt(0).toUpperCase() + s.slice(1); // capitalize  // "ven. 27 juin" -> "Ven. 27 juin"
+        }
+
+        private timeLabel(d: Date): string {
+            return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        private async fetchDesign(url: string): Promise<Buffer> {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Impossible de récupérer le design depuis ${res.status} : ${url}`);
+            return Buffer.from(await res.arrayBuffer());
+        }
+
+         // Post-commit best-effort : génère PNG+PDF de chaque billet et stocke les URLs.
+         // Ne throw jamais : un échec laisse le billet avec des URLs null (rattrapé en brique C).
+        async generateAssetsForOrder(orderId: string): Promise<void> {
+            const tickets = await this.prisma.ticket.findMany({ 
+                where: { orderId }, 
+                include: { ticketCategory : {include : {event: true} }}, });
+
+                // Cache de PROMESSES par catégorie : un seul fetch même en parallèle.
+                const designCache = new Map<string, Promise<Buffer>>();
+                const getDesign = (categoryId: string, url: string) : Promise<Buffer>=> {
+                    let p = designCache.get(categoryId);
+                    if (!p) {
+                        p = this.fetchDesign(url);
+                        designCache.set(categoryId, p);
+                    }
+                    return p;
+                }
+                    await Promise.allSettled(tickets.map(async (t) => {
+                        try {
+                            const ev = t.ticketCategory.event;
+                            const design = await getDesign(t.ticketCategoryId, t.ticketCategory.ticketDesignUrl);
+                            const png = await this.buildTicketImage(design, {
+                                qrToken: t.qrToken,
+                                eventCategory: ev.category,
+                                eventTitle: ev.title,
+                                dateLabel: this.dateLabel(ev.startDate),
+                                timeLabel: this.timeLabel(ev.startDate),
+                                placeLabel: t.ticketCategory.name,
+                            })
+                            const imageRes = await this.cloudinary.uploadBuffer(png, CloudinaryFolder.TICKETS);
+                            const pdf = await this.buildTicketPdf(png);
+                            const pdfRes = await this.cloudinary.uploadRawBuffer(pdf, CloudinaryFolder.TICKETS, `ticket-${t.id}`);
+                            await this.prisma.ticket.update({
+                                where: { id: t.id },
+                                data: { ticketImageUrl: imageRes.secure_url, pdfUrl: pdfRes.secure_url },
+                            });
+                        } catch (e){
+                            this.logger.error(`Echec génération des visuels du billet ${t.id} : ${(e instanceof Error ? e.stack : String(e))}`,)
+                        }
+                    }))
+                }
 
         // Rend la carte du billet (PNG, 750x1040) à partir du design (PNG) et des champs du billet.
         async buildTicketImage(designBuffer: Buffer, fields: TicketFields): Promise<Buffer> {
