@@ -50,4 +50,15 @@ describe('TicketAssetService.buildTicketImage', () => {
     });
     expect(Buffer.isBuffer(png)).toBe(true);
   });
+
+
+describe('TicketAssetService.buildTicketPdf', () => {
+  const service = new TicketAssetService({} as any, {} as any);
+
+  it('renvoie un buffer PDF (magic %PDF)', async () => {
+    const png = await sharp({ create: { width: 300, height: 300, channels: 3, background: '#000000' } }).png().toBuffer();
+    const pdf = await service.buildTicketPdf(png);
+    expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
+  });
+});
 });

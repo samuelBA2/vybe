@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import sharp from 'sharp';
 import * as QRCode from 'qrcode';
+import PDFDocument from 'pdfkit';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
 
@@ -96,4 +97,21 @@ function escapeXml(s: string): string {
         .toBuffer();
 
         }
+
+        async buildTicketPdf(ticketPng: Buffer): Promise<Buffer> {
+            const meta = await sharp(ticketPng).metadata();
+            const w = meta.width ?? 0; // valeur finale non connue avant le rendu 
+            const h = meta.height ?? 0;
+            return new Promise<Buffer>((resolve, reject) => {
+                const doc = new PDFDocument({ size: [w, h], margin: 0 });
+                const chunks: Buffer[] = []; 
+
+                doc.on('data', (chunk) => chunks.push(chunk));
+                doc.on('end', () => resolve(Buffer.concat(chunks)));
+                doc.on('error', (err) => reject(err));
+                doc.image(ticketPng, 0, 0, { width: w, height: h });
+                doc.end();
+            })
+        }
+
     }
