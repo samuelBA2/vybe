@@ -17,8 +17,10 @@ describe('OrderService', () => {
   };
   let prisma: {
     ticketCategory: { findUnique: jest.Mock };
+    ticket: { findMany: jest.Mock}
     $transaction: jest.Mock;
   };
+  let ticketAssets: { generateAssetsForOrder: jest.Mock };
 
   beforeEach(() => {
     tx = {
@@ -28,10 +30,12 @@ describe('OrderService', () => {
     };
     prisma = {
       ticketCategory: { findUnique: jest.fn() },
+      ticket: { findMany: jest.fn().mockResolvedValue([]) },
       // $transaction exécute le callback en lui injectant notre faux tx.
       $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
     };
-    service = new OrderService(prisma as unknown as PrismaService);
+    ticketAssets = { generateAssetsForOrder: jest.fn().mockResolvedValue(undefined) };
+    service = new OrderService(prisma as unknown as PrismaService, ticketAssets as any);
   });
 
   // Catégorie valide par défaut : PUBLISHED, deadline future, stock large.
@@ -96,6 +100,11 @@ describe('OrderService', () => {
     tx.$executeRaw.mockResolvedValue(1); // réservation OK
     tx.order.create.mockResolvedValue({ id: 'order-1' });
     tx.ticket.createMany.mockResolvedValue({ count: 2 });
+    // La réponse relit les billets (avec leurs URLs) après le commit.
+    prisma.ticket.findMany.mockResolvedValue([
+      { qrToken: 'q1', pdfUrl: null, ticketImageUrl: null },
+      { qrToken: 'q2', pdfUrl: null, ticketImageUrl: null },
+    ]);
 
     const res = await service.createOrder('user-1', dto({ quantity: 2 }));
 
@@ -131,5 +140,31 @@ describe('OrderService', () => {
     expect(res.order).toEqual({ id: 'order-1' });
     expect(res.tickets).toHaveLength(2);
     expect(res.tickets[0]).toHaveProperty('qrToken');
+  });
+
+  it('déclenche la génération des visuels en post-commit (best-effort)', async () => {
+    prisma.ticketCategory.findUnique.mockResolvedValue(category());
+    tx.$executeRaw.mockResolvedValue(1);
+    tx.order.create.mockResolvedValue({ id: 'order-42' });
+    tx.ticket.createMany.mockResolvedValue({ count: 2 });
+    prisma.ticket.findMany.mockResolvedValue([{ qrToken: 'q', pdfUrl: null, ticketImageUrl: null }]);
+
+    await service.createOrder('user-1', dto());
+
+    // La génération est appelée avec l'id de la commande, APRÈS le commit.
+    expect(ticketAssets.generateAssetsForOrder).toHaveBeenCalledWith('order-42');
+  });
+
+  it("un échec de la génération ne fait pas échouer l'achat", async () => {
+    prisma.ticketCategory.findUnique.mockResolvedValue(category());
+    tx.$executeRaw.mockResolvedValue(1);
+    tx.order.create.mockResolvedValue({ id: 'order-99' });
+    tx.ticket.createMany.mockResolvedValue({ count: 1 });
+    prisma.ticket.findMany.mockResolvedValue([{ qrToken: 'q', pdfUrl: null, ticketImageUrl: null }]);
+    ticketAssets.generateAssetsForOrder.mockRejectedValue(new Error('génération KO'));
+
+    // L'achat aboutit malgré l'échec de la génération.
+    const res = await service.createOrder('user-1', dto({ quantity: 1 }));
+    expect(res.order).toEqual({ id: 'order-99' });
   });
 });

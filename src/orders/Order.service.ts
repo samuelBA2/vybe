@@ -1,15 +1,18 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException } from "@nestjs/common";
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException, Logger} from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { PrismaService } from "src/prisma/prisma.service";
 import { PLATFORM_FEE_RATE } from "src/common/constants";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
+import { TicketAssetService } from "src/ticket-asset/ticket-asset.service";
 
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 @Injectable()
 export class OrderService {
-    constructor ( private readonly prisma: PrismaService){}
+
+    private readonly logger = new Logger(OrderService.name);
+    constructor ( private readonly prisma: PrismaService,private readonly ticketAssets: TicketAssetService){}
     async createOrder(userId: string, dto: CreateOrderDto){ 
         // charger la catégorie + son événement 
         const category = await this.prisma.ticketCategory.findUnique({
@@ -33,7 +36,7 @@ export class OrderService {
         const organizerAmount = round2(totalAmount - platformFee);
 
         // Transaction : réservation atomique + order + billets
-        return this.prisma.$transaction(async (tx) => {
+        const order = await this.prisma.$transaction(async (tx) => {
             // Reservation atomique anti-survente
             const affected = await tx.$executeRaw`
             UPDATE "TicketCategory" 
@@ -43,24 +46,40 @@ export class OrderService {
             if (affected === 0) throw new ConflictException('Stock insuffisant pour cette quantité.');
 
         // Commande (paiement stubbé)
-        const order = await tx.order.create({
+        const created = await tx.order.create({
             data: {
                 userId,
-                ticketCategoryId : dto.ticketCategoryId,
+                ticketCategoryId: dto.ticketCategoryId,
                 quantity: dto.quantity,
                 unitPrice, totalAmount, platformFee, organizerAmount,
                 paymentStatus: 'PAID' // stub — la brique B posera le vrai PENDING→PAID
-            }})
+            }
+        })
+
+
         // Billet gere le qrToken
         const tickets = Array.from({ length: dto.quantity }, () => ({
-            orderId: order.id,
+            orderId: created.id,
             ticketCategoryId: dto.ticketCategoryId,
             qrToken: randomUUID(),
             expiresAt: event.endDate,
         }))
         await tx.ticket.createMany({ data: tickets})
 
-        return {order, tickets: tickets.map((t) => ({ qrToken: t.qrToken}))};
+        return created;
         })
+
+         // Post-commit best-effort : ne doit JAMAIS faire échouer l'achat.
+        try {
+            await this.ticketAssets.generateAssetsForOrder(order.id);
+        } catch (e) {
+            this.logger.error(`Géneration des visuels échouée (order ${order.id}) : ${(e instanceof Error ? e.stack : String(e))}`,)
+        }
+         // Billets avec leurs URLs (renseignées si la génération a réussi).
+        const tickets = await this.prisma.ticket.findMany({
+            where: { orderId: order.id },
+            select: { qrToken: true, pdfUrl: true, ticketImageUrl: true }
+        })
+        return { order, tickets };
     }
 }
