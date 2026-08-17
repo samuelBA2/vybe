@@ -1,6 +1,9 @@
 import sharp from 'sharp';
-import * as QRCode from 'qrcode';
 import { TicketAssetService, TicketFields } from './ticket-asset.service';
+
+// qrcode.toBuffer est non-configurable → on mocke le module au lieu de le spy.
+jest.mock('qrcode', () => ({ toBuffer: jest.fn() }));
+import * as QRCode from 'qrcode';
 
 async function makeDesign(w: number, h: number): Promise<Buffer> {
   return sharp({ create: { width: w, height: h, channels: 3, background: '#334155' } }).png().toBuffer();
@@ -17,6 +20,17 @@ const baseFields: TicketFields = {
 
 describe('TicketAssetService.buildTicketImage', () => {
   const service = new TicketAssetService({} as any, {} as any);
+  let qrPng: Buffer;
+
+  beforeAll(async () => {
+    // PNG valide minimal renvoyé par le mock qrcode.
+    qrPng = await sharp({ create: { width: 10, height: 10, channels: 3, background: '#000000' } }).png().toBuffer();
+  });
+
+  beforeEach(() => {
+    (QRCode.toBuffer as jest.Mock).mockReset();
+    (QRCode.toBuffer as jest.Mock).mockResolvedValue(qrPng);
+  });
 
   it('rend une carte PNG de dimensions fixes quelle que soit la taille du design', async () => {
     const png = await service.buildTicketImage(await makeDesign(1200, 400), baseFields);
@@ -26,10 +40,8 @@ describe('TicketAssetService.buildTicketImage', () => {
   });
 
   it('encode le qrToken brut dans le QR', async () => {
-    const spy = jest.spyOn(QRCode, 'toBuffer');
     await service.buildTicketImage(await makeDesign(400, 400), baseFields);
-    expect(spy.mock.calls[0][0]).toBe(baseFields.qrToken);
-    spy.mockRestore();
+    expect((QRCode.toBuffer as jest.Mock).mock.calls[0][0]).toBe(baseFields.qrToken);
   });
 
   it('échappe les valeurs texte sans casser le rendu', async () => {
