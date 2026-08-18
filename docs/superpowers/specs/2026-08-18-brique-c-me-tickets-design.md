@@ -89,6 +89,22 @@ Conséquences :
 - Billet annulé il y a plus de 24h → masqué.
 - Billet `CANCELLED` sans `cancelledAt` (données incohérentes) → masqué.
 
+### Un billet = une entrée (achats multiples)
+
+Chaque unité achetée est une ligne `Ticket` distincte (le `createOrder` fait un
+`createMany` de `quantity` billets, chacun avec son propre `qrToken`, `pdfUrl` et
+`ticketImageUrl`). Conséquences côté réponse :
+
+- Une commande de N billets → **N entrées** dans le tableau `tickets` de
+  l'événement, chacune avec son propre QR/PNG/PDF.
+- Plusieurs commandes du **même** utilisateur pour le **même** événement →
+  **fusionnées** sous une seule entrée d'événement ; tous leurs billets sont
+  réunis dans le même tableau `tickets`. (Une carte par événement, tous les QR
+  dedans.)
+
+Chaque billet porte à la fois `ticketImageUrl` (PNG) et `pdfUrl` (PDF) : le front
+affiche le PNG et propose un bouton « télécharger » vers le PNG **ou** le PDF.
+
 ### Regroupement & split
 
 1. Grouper les billets conservés par `event.id`.
@@ -150,5 +166,8 @@ Spec unitaire (`MyTicketsService`, `PrismaService` mocké) couvrant :
   - annulé il y a 23h → **visible** ;
   - annulé il y a 25h → **masqué** ;
   - `CANCELLED` sans `cancelledAt` → **masqué**.
+- Achat multiple : commande de N billets → N entrées `tickets` distinctes.
+- Deux commandes du même utilisateur pour le même événement → une seule entrée
+  d'événement regroupant tous les billets.
 - Réponse vide quand l'utilisateur n'a aucun billet.
 - `posterUrl` / `ticketImageUrl` / `pdfUrl` à `null` gérés sans erreur.
