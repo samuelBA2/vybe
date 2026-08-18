@@ -246,6 +246,7 @@ model Ticket {
   qrStatus         QRStatus  @default(UNUSED)
   scannedAt        DateTime?
   scannedByAgentId String?
+  cancelledAt      DateTime?  // posé au passage en CANCELLED (brique d'annulation future) ; lu par GET /me/tickets pour la règle des 24h
 
   expiresAt        DateTime
   pdfUrl           String?
