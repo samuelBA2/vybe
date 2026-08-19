@@ -29,6 +29,9 @@ function escapeXml(s: string): string {
     export class TicketAssetService {
         private readonly logger = new Logger(TicketAssetService.name);
 
+        // userId dont un rattrapage est déjà en cours (anti double-régénération).
+        private readonly inFlight = new Set<string>();
+
         constructor(
             private readonly prisma: PrismaService,
             private readonly cloudinary: CloudinaryService,
@@ -95,6 +98,30 @@ function escapeXml(s: string): string {
                     this.logger.error(`Echec génération des visuels du billet ${t.id} : ${(e instanceof Error ? e.stack : String(e))}`,)
                 }
             }))
+        }
+
+        // Rattrapage best-effort : régénère uniquement les billets de l'utilisateur
+        // dont un visuel manque. Non-bloquant côté appelant ; ne throw jamais.
+        async regenerateMissingForUser(userId: string): Promise<void> {
+            if (this.inFlight.has(userId)) return; // déjà en vol pour cet utilisateur
+            this.inFlight.add(userId);
+            try {
+                const tickets = await this.prisma.ticket.findMany({
+                    where: {
+                        order: { userId },
+                        OR: [{ ticketImageUrl: null }, { pdfUrl: null }],
+                    },
+                    include: { ticketCategory: { include: { event: true } } },
+                });
+                if (tickets.length === 0) return;
+                await this.generateForTickets(tickets);
+            } catch (e) {
+                this.logger.error(
+                    `Rattrapage des visuels échoué (user ${userId}) : ${e instanceof Error ? e.stack : String(e)}`,
+                );
+            } finally {
+                this.inFlight.delete(userId);
+            }
         }
 
         // Rend la carte du billet (PNG, 750x1040) à partir du design (PNG) et des champs du billet.
