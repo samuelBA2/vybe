@@ -38,7 +38,7 @@ function escapeXml(s: string): string {
         ) {}
 
         private dateLabel(d: Date): string {
-            const s = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' });
+            const s = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
             return s.charAt(0).toUpperCase() + s.slice(1); // capitalize  // "ven. 27 juin" -> "Ven. 27 juin"
         }
 
