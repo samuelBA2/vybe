@@ -96,7 +96,7 @@ export class AgentService {
     const ticket = await this.prisma.ticket.findUnique({ where: { qrToken },
     include: { ticketCategory: true, order: { include: { user: true } } },
   });
-    if (!ticket) throw new NotFoundException('Billet introuvable.');
+    if (!ticket) throw new NotFoundException("Ce billet n'appartient pas à votre événement.");
 
     if (ticket.ticketCategory.eventId !== eventId) throw new ForbiddenException("Ce billet n'appartient pas à votre événement.")
 
