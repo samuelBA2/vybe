@@ -4,10 +4,15 @@ import { PrismaService } from 'src/prisma/prisma.service';
 describe('MyTicketsService', () => {
   let service: MyTicketsService;
   let prisma: { ticket: { findMany: jest.Mock } };
+  let ticketAssets: { regenerateMissingForUser: jest.Mock };
 
   beforeEach(() => {
     prisma = { ticket: { findMany: jest.fn().mockResolvedValue([]) } };
-    service = new MyTicketsService(prisma as unknown as PrismaService);
+    ticketAssets = { regenerateMissingForUser: jest.fn().mockResolvedValue(undefined) };
+    service = new MyTicketsService(
+      prisma as unknown as PrismaService,
+      ticketAssets as any,
+    );
   });
 
   const HOUR = 3_600_000;
@@ -124,5 +129,27 @@ describe('MyTicketsService', () => {
     expect(args.where.ticketCategory.event.endDate.lt).toBeInstanceOf(Date);
     // Tri : le plus récent d'abord.
     expect(args.orderBy[0].ticketCategory.event.startDate).toBe('desc');
+  });
+
+  // --- Rattrapage des visuels (fire-and-forget) ---
+
+  describe('rattrapage des visuels', () => {
+    it('déclenche regenerateMissingForUser quand un billet a une URL null', async () => {
+      scopedRows([row({ id: 't1', ticketImageUrl: null })]);
+      await service.getMyTickets('user-1');
+      expect(ticketAssets.regenerateMissingForUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('ne déclenche rien quand tous les visuels sont présents', async () => {
+      scopedRows([row({ id: 't1' })]); // urls par défaut = 'png-url' / 'pdf-url'
+      await service.getMyTickets('user-1');
+      expect(ticketAssets.regenerateMissingForUser).not.toHaveBeenCalled();
+    });
+
+    it('non-bloquant : un rejet du rattrapage ne casse pas la lecture', async () => {
+      scopedRows([row({ id: 't1', pdfUrl: null })]);
+      ticketAssets.regenerateMissingForUser.mockRejectedValue(new Error('KO'));
+      await expect(service.getMyTickets('user-1')).resolves.toBeDefined();
+    });
   });
 });

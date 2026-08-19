@@ -1,13 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { QRStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { TicketAssetService } from 'src/ticket-asset/ticket-asset.service';
 import { MyEventTicketsDto, MyTicketsResponseDto } from './dto/MyTickets.dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class MyTicketsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly ticketAssets: TicketAssetService,
+    ) {}
 
     async getMyTickets(userId: string): Promise<MyTicketsResponseDto> {
     const now = new Date();
@@ -15,7 +19,20 @@ export class MyTicketsService {
         this.getScope(userId, now, 'upcoming'),
         this.getScope(userId, now, 'past'),
     ]);
-    return { upcoming, past };
+    const result = { upcoming, past };
+
+    // Rattrapage best-effort non-bloquant : si un visuel manque, on relance la
+    // génération en arrière-plan sans attendre (URLs peuplées au prochain chargement).
+    const hasMissing = [...upcoming, ...past].some((e) =>
+        e.tickets.some((t) => t.ticketImageUrl === null || t.pdfUrl === null),
+    );
+    if (hasMissing) {
+        void this.ticketAssets
+            .regenerateMissingForUser(userId)
+            .catch(() => undefined);
+    }
+
+    return result;
     }
 
     private async getScope(
