@@ -14,7 +14,8 @@ describe('AgentService', () => {
   let prisma: {
     event: { findUnique: jest.Mock };
     agent: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock; update: jest.Mock; count: jest.Mock };
-    ticket: { findUnique: jest.Mock; updateMany: jest.Mock };
+    ticket: { findUnique: jest.Mock; updateMany: jest.Mock; groupBy: jest.Mock; findMany: jest.Mock };
+    ticketCategory: { findMany: jest.Mock };
   };
 
   beforeEach(() => {
@@ -27,7 +28,8 @@ describe('AgentService', () => {
         update: jest.fn(),
         count: jest.fn(),
       },
-      ticket: { findUnique: jest.fn(), updateMany: jest.fn() },
+      ticket: { findUnique: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findMany: jest.fn() },
+      ticketCategory: { findMany: jest.fn() },
     };
     service = new AgentService(prisma as unknown as PrismaService);
   });
@@ -254,6 +256,125 @@ describe('AgentService', () => {
       prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
       const res = await service.scan('event-1', 'agent-1', 'qr-1');
       expect(res.holderName).toBe('Porteur inconnu');
+    });
+  });
+
+  // ─── getScanDashboard ─────────────────────────────────────────────────────────
+  describe('getScanDashboard', () => {
+    it('événement introuvable → 404, aucune agrégation', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+      await expect(service.getScanDashboard('user-1', 'VYBE-8JGBLV')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.ticket.groupBy).not.toHaveBeenCalled();
+    });
+
+    it('non-propriétaire → 403, aucune agrégation', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1',
+        reference: 'VYBE-8JGBLV',
+        title: 'Fête',
+        createdById: 'owner',
+      });
+      await expect(service.getScanDashboard('intrus', 'VYBE-8JGBLV')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(prisma.ticket.groupBy).not.toHaveBeenCalled();
+    });
+
+    it("agrège totaux, catégories, agents et taux d'entrée", async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1',
+        reference: 'VYBE-8JGBLV',
+        title: 'Fête',
+        createdById: 'owner',
+      });
+      prisma.ticket.groupBy
+        // statuts globaux
+        .mockResolvedValueOnce([
+          { qrStatus: 'USED', _count: 3 },
+          { qrStatus: 'UNUSED', _count: 1 },
+          { qrStatus: 'CANCELLED', _count: 2 },
+        ])
+        // USED par catégorie
+        .mockResolvedValueOnce([
+          { ticketCategoryId: 'c1', _count: 2 },
+          { ticketCategoryId: 'c2', _count: 1 },
+        ])
+        // USED par agent
+        .mockResolvedValueOnce([{ scannedByAgentId: 'a1', _count: 3 }]);
+      prisma.ticketCategory.findMany.mockResolvedValue([
+        { id: 'c1', name: 'VIP', soldCount: 5, totalStock: 10 },
+        { id: 'c2', name: 'Standard', soldCount: 4, totalStock: null },
+      ]);
+      prisma.agent.findMany.mockResolvedValue([{ id: 'a1', firstname: 'Ada', lastname: 'Lovelace' }]);
+      prisma.ticket.findMany.mockResolvedValue([]); // timeline vide ici
+
+      const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
+
+      expect(res.event).toEqual({ reference: 'VYBE-8JGBLV', title: 'Fête' });
+      expect(res.totals).toEqual({
+        total: 6,
+        scanned: 3,
+        unused: 1,
+        cancelled: 2,
+        entryRate: 0.75, // 3 / (3 + 1)
+      });
+      expect(res.byCategory).toEqual([
+        { name: 'VIP', sold: 5, scanned: 2, remaining: 3 },
+        { name: 'Standard', sold: 4, scanned: 1, remaining: 3 },
+      ]);
+      expect(res.byAgent).toEqual([{ agentId: 'a1', name: 'Ada Lovelace', scanned: 3 }]);
+    });
+
+    it('cas vide (0 scan) → tableaux vides, entryRate 0 sans division par zéro', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1',
+        reference: 'VYBE-8JGBLV',
+        title: 'Fête',
+        createdById: 'owner',
+      });
+      prisma.ticket.groupBy
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([]);
+      prisma.agent.findMany.mockResolvedValue([]);
+      prisma.ticket.findMany.mockResolvedValue([]);
+
+      const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
+
+      expect(res.totals).toEqual({ total: 0, scanned: 0, unused: 0, cancelled: 0, entryRate: 0 });
+      expect(res.byCategory).toEqual([]);
+      expect(res.byAgent).toEqual([]);
+      expect(res.timeline).toEqual([]);
+    });
+
+    it('timeline : deux scans même heure → un bucket count 2 ; heures différentes → deux buckets triés', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1',
+        reference: 'VYBE-8JGBLV',
+        title: 'Fête',
+        createdById: 'owner',
+      });
+      prisma.ticket.groupBy
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([]);
+      prisma.agent.findMany.mockResolvedValue([]);
+      prisma.ticket.findMany.mockResolvedValue([
+        { scannedAt: new Date('2026-08-20T18:05:00.000Z') },
+        { scannedAt: new Date('2026-08-20T18:52:00.000Z') },
+        { scannedAt: new Date('2026-08-20T20:10:00.000Z') },
+      ]);
+
+      const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
+
+      expect(res.timeline).toEqual([
+        { hour: '2026-08-20T18:00:00.000Z', count: 2 },
+        { hour: '2026-08-20T20:00:00.000Z', count: 1 },
+      ]);
     });
   });
 });

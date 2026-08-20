@@ -5,6 +5,7 @@ import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
 import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
+import { ScanDashboardResponseDto } from './dto/ScanDashboard.dto';
 
 @Injectable()
 export class AgentService {
@@ -126,7 +127,97 @@ export class AgentService {
     }
   }
 
+  // Dashboard de scans réservé au créateur de l'événement (brique E).
+  // Agrégation hybride : groupBy pour statuts/catégories/agents,
+  // findMany léger des scannedAt (USED) pour la timeline horaire en JS.
+  async getScanDashboard(userId: string, reference: string): Promise<ScanDashboardResponseDto> {
+    const event = await this.prisma.event.findUnique({ where: { reference } });
+    if (!event) throw new NotFoundException('Événement introuvable.');
+    if (event.createdById !== userId) throw new ForbiddenException('Vous ne gérez pas cet événement.');
 
+    const eventId = event.id;
+    const eventFilter = { ticketCategory: { eventId } };
+
+    // 1. Statuts globaux
+    const statusGroups = await this.prisma.ticket.groupBy({
+      by: ['qrStatus'],
+      where: eventFilter,
+      _count: true,
+    });
+    const countByStatus = (s: string): number =>
+      statusGroups.find((g: any) => g.qrStatus === s)?._count ?? 0;
+    const scanned = countByStatus('USED');
+    const unused = countByStatus('UNUSED');
+    const cancelled = countByStatus('CANCELLED');
+    const total = scanned + unused + cancelled;
+    const attended = scanned + unused;
+    const entryRate = attended === 0 ? 0 : Math.round((scanned / attended) * 10000) / 10000;
+
+    // 2. Par catégorie
+    const categories = await this.prisma.ticketCategory.findMany({
+      where: { eventId },
+      select: { id: true, name: true, soldCount: true, totalStock: true },
+    });
+    const usedByCategory = await this.prisma.ticket.groupBy({
+      by: ['ticketCategoryId'],
+      where: { qrStatus: 'USED', ...eventFilter },
+      _count: true,
+    });
+    const scannedForCat = (id: string): number =>
+      usedByCategory.find((g: any) => g.ticketCategoryId === id)?._count ?? 0;
+    const byCategory = categories.map((c) => {
+      const catScanned = scannedForCat(c.id);
+      return { name: c.name, sold: c.soldCount, scanned: catScanned, remaining: c.soldCount - catScanned };
+    });
+
+    // 3. Par agent
+    const usedByAgent = await this.prisma.ticket.groupBy({
+      by: ['scannedByAgentId'],
+      where: { qrStatus: 'USED', ...eventFilter },
+      _count: true,
+    });
+    const agents = await this.prisma.agent.findMany({
+      where: { eventId },
+      select: { id: true, firstname: true, lastname: true },
+    });
+    const agentName = (a: { firstname: string | null; lastname: string | null }): string =>
+      [a.firstname, a.lastname].filter(Boolean).join(' ').trim() || 'Agent inconnu';
+    const byAgent = usedByAgent
+      .filter((g: any) => g.scannedByAgentId != null)
+      .map((g: any) => {
+        const agent = agents.find((a) => a.id === g.scannedByAgentId);
+        return {
+          agentId: g.scannedByAgentId as string,
+          name: agent ? agentName(agent) : 'Agent inconnu',
+          scanned: g._count as number,
+        };
+      });
+
+    // 4. Timeline (buckets horaires, troncature en UTC pour un résultat déterministe)
+    const usedTickets = await this.prisma.ticket.findMany({
+      where: { qrStatus: 'USED', ...eventFilter },
+      select: { scannedAt: true },
+    });
+    const buckets = new Map<string, number>();
+    for (const t of usedTickets) {
+      if (!t.scannedAt) continue;
+      const d = new Date(t.scannedAt);
+      d.setUTCMinutes(0, 0, 0);
+      const key = d.toISOString();
+      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    }
+    const timeline = [...buckets.entries()]
+      .map(([hour, count]) => ({ hour, count }))
+      .sort((a, b) => a.hour.localeCompare(b.hour));
+
+    return {
+      event: { reference: event.reference, title: event.title },
+      totals: { total, scanned, unused, cancelled, entryRate },
+      byCategory,
+      byAgent,
+      timeline,
+    };
+  }
 
   private async generateUniqueCode(): Promise<string>{
     for (let i = 0; i < 5; i++){
