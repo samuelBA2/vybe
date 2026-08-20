@@ -4,7 +4,7 @@ export interface ScanDashboardResponseDto {
         total: number;
         scanned: number;
         unused: number; // Billets USED
-        canceled: number; // Billets CANCELLED
+        cancelled: number; // Billets CANCELLED
         entryRate: number; // scanned / (scanned + unused), fraction 0..1 à 4 décimales, 0 si nul
     };
     byCategory:{ name: string; sold: number; scanned: number; remaining: number}[];
