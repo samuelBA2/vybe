@@ -45,4 +45,11 @@ export class AgentController {
   async scan(@Req() req, @Body() dto: ScanDto){
     return this.agentService.scan(req.user.eventId, req.user.agentId, dto.qrToken)
   }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('USER')
+  @Get('events/:reference/scan-dashboard')
+  async getScanDashboard(@Req() req, @Param('reference') reference: string) {
+    return this.agentService.getScanDashboard(req.user.sub, reference);
+  }
 }

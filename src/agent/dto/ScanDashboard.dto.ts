@@ -3,7 +3,7 @@ export interface ScanDashboardResponseDto {
     totals:{
         total: number;
         scanned: number;
-        unused: number; // Billets USED
+        unused: number; // Billets UNUSED (non scannés)
         cancelled: number; // Billets CANCELLED
         entryRate: number; // scanned / (scanned + unused), fraction 0..1 à 4 décimales, 0 si nul
     };
