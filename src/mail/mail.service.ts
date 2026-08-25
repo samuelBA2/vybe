@@ -461,19 +461,93 @@ export class MailService {
     }
   }
 
-  findAll() {
-    return `This action returns all mail`;
-  }
+  // Relaie un message du formulaire « Contacter l'équipe Vybe ». Le mail EST le
+  // canal (aucune persistance) ; `replyTo` = l'adresse de l'utilisateur pour que
+  // l'équipe réponde directement. La désinfection HTML se fait ici, au plus près
+  // de la construction du message, pour couvrir tous les appelants.
+  async sendContactMessage(params: {
+    fromEmail: string;
+    reason: string;
+    subject?: string;
+    message: string;
+  }): Promise<void> {
+    // Message issu d'un formulaire PUBLIC (utilisateur non authentifié) : on
+    // échappe le HTML avant de l'injecter, PUIS on convertit les retours à la
+    // ligne — jamais l'inverse (sinon les <br> seraient ré-échappés).
+    const escapeHtml = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 
-  findOne(id: number) {
-    return `This action returns a #${id} mail`;
-  }
+    const subject = params.subject?.trim() || 'Sans objet';
+    const safeReason = escapeHtml(params.reason);
+    const safeSubject = escapeHtml(subject);
+    const safeMessage = escapeHtml(params.message).replace(/\n/g, '<br>');
+    const safeFrom = escapeHtml(params.fromEmail);
 
-  // update(id: number, updateMailDto: UpdateMailDto) {
-  //   return `This action updates a #${id} mail`;
-  // }
+    // Destinataire = boîte de l'équipe Vybe (même fallback que la modération).
+    const to =
+      this.config.get<string>('VYBE_TEAM_EMAIL') ??
+      process.env.SENDGRID_FROM_EMAIL!;
 
-  remove(id: number) {
-    return `This action removes a #${id} mail`;
+    const msg = {
+      to,
+      // `from` reste l'expéditeur vérifié Vybe (contrainte SendGrid) ; c'est
+      // `replyTo` qui porte l'adresse de l'utilisateur.
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL!,
+        name: process.env.SENDGRID_FROM_NAME || 'Vybe Team',
+      },
+      replyTo: params.fromEmail,
+      subject: `[Contact – ${params.reason}] ${subject}`,
+      text:
+        `De : ${params.fromEmail}\n` +
+        `Motif : ${params.reason}\n` +
+        `Objet : ${subject}\n\n` +
+        params.message,
+      html: `
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#0d0d0d;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d0d0d;padding:40px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#141414;border-radius:16px;overflow:hidden;">
+        <tr><td align="center" style="background:linear-gradient(135deg,#7B2FF7,#F107A3);padding:32px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">Nouveau message de contact</h1>
+        </td></tr>
+        <tr><td style="padding:32px 40px;">
+          <p style="color:#888;margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Motif</p>
+          <p style="color:#fff;margin:0 0 20px;font-size:15px;">${safeReason}</p>
+          <p style="color:#888;margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Objet</p>
+          <p style="color:#fff;margin:0 0 20px;font-size:15px;">${safeSubject}</p>
+          <p style="color:#888;margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Message</p>
+          <p style="color:#ccc;margin:0 0 24px;font-size:15px;line-height:1.7;">${safeMessage}</p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:10px;">
+            <tr>
+              <td style="padding:14px 16px;color:#888;font-size:13px;">Répondre à</td>
+              <td style="padding:14px 16px;font-size:13px;"><a href="mailto:${safeFrom}" style="color:#F107A3;text-decoration:none;">${safeFrom}</a></td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`,
+    };
+
+    try {
+      await sgMail.send(msg);
+      this.logger.log(`Mail de contact relayé (reply-to ${params.fromEmail})`);
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'envoi du mail de contact : ${error.message}`,
+      );
+      throw new InternalServerErrorException(
+        "Impossible d'envoyer votre message, réessayez.",
+      );
+    }
   }
 }

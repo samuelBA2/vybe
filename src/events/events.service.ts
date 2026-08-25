@@ -28,7 +28,9 @@ export class EventsService {
   // triés par date de début, avec médias et catégories de billets.
   async findPublished() {
     return this.prisma.event.findMany({
-      where: { status: $Enums.EventStatus.PUBLISHED, endDate : { gte: new Date()} },
+      where: { status: $Enums.EventStatus.PUBLISHED,
+        endDate: { gte: new Date() } //garde les événements qui ne sont pas encore terminés
+      },
       orderBy: { startDate: 'asc' },
       include: { mediaFiles: true, ticketCategories: true },
     });

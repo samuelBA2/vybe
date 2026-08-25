@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { UsersService } from './users.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from '../otp/otp.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -14,6 +15,7 @@ describe('UsersService', () => {
         { provide: PrismaService, useValue: {} },
         { provide: JwtService, useValue: {} },
         { provide: OtpService, useValue: {} },
+        { provide: CloudinaryService, useValue: {} },
       ],
     }).compile();
 

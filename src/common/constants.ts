@@ -43,6 +43,16 @@ export const ALLOWED_MIME = new Set<string>([
 // l'organisateur (organizerAmount = totalAmount − platformFee).
 export const PLATFORM_FEE_RATE = 0.15 // 15%
 
+// ─── Photo de profil (avatar) ────────────────────────────────────────────────
+export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 Mo
+
+// Images uniquement — validées par MAGIC BYTES (jamais file.mimetype).
+export const AVATAR_ALLOWED_MIME = new Set<string>([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+
 // Mappage d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
 export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
   if (mime.startsWith('image/')) return 'IMAGE';

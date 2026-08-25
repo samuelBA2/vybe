@@ -3,10 +3,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  ConflictException,
   UnauthorizedException,
+  PayloadTooLargeException,
+  UnsupportedMediaTypeException
 } from '@nestjs/common';
-import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -19,6 +19,10 @@ import * as path from 'path';
 import { JwtService } from '@nestjs/jwt';
 import { OtpService } from 'src/otp/otp.service';
 import { BCRYPT_ROUNDS } from 'src/common/constants';
+
+import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
+import { CloudinaryFolder } from 'src/cloudinary/cloudinary.folder';
+import { AVATAR_ALLOWED_MIME, AVATAR_MAX_BYTES } from 'src/common/constants';
 
 const MAX_UPDATES_PER_MONTH = 2;
 
@@ -40,6 +44,7 @@ export class UsersService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly otpService: OtpService,
+    private readonly cloudinary: CloudinaryService
   ) {}
 
   // Profil de l'utilisateur connecté (champs publics uniquement —
@@ -343,6 +348,63 @@ export class UsersService {
       user: updated,
     };
   }
+
+  // Modification de l'avatar 
+
+  async changeAvatar(userId: string, file: Express.Multer.File) {
+    // Garde fou: fichier présent non vide.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Aucun fichier reçu.')
+    }
+
+    // Revalidation TAILLE côté serveur (multer 1re barrière)
+    if (file.size > AVATAR_MAX_BYTES) {
+      throw new PayloadTooLargeException (`Image trop volumineuse (max ${AVATAR_MAX_BYTES / 1024 / 1024} Mo).`)
+    }
+
+    // Revalidation TYPE par MAGIC BYTES jamais file.mimetype (falsifiable)
+    // import() dynamique : file-type est ESM-only, projet CommonJS.
+    const { fileTypeFromBuffer } = await import('file-type');
+    const detected = await fileTypeFromBuffer(file.buffer);
+    if (!detected || !AVATAR_ALLOWED_MIME.has(detected.mime)) {
+      throw new UnsupportedMediaTypeException(`Type d'image non autorisé${detected ? ` (${detected.mime})` : ''}.`,);
+    }
+
+    // On mémorise l'ancien publicId Avant de l'écraser, pour le ménage finale.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId},
+      select: { avatarPublicId: true}
+    })
+    if (!user){
+      throw new NotFoundException('Utilisateur introuvable.')
+    }
+    const oldPublicId = user.avatarPublicId;
+
+    // Upload la NOUVELLE image (dossier profils).
+    let result;
+    try {
+      result = await this.cloudinary.uploadImage(file, CloudinaryFolder.PROFILE_PHOTOS)
+    } catch (err) {
+      throw new BadRequestException("L'upload de la photo a échoué, réessayez.")
+    }
+
+    // Enregistre la nouvelle URL + publicId (l'utilisateur a désormais sa photo)
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatarUrl: result.secure_url, avatarPublicId: result.public_id}
+    })
+
+    // Supprime l'ancienne de Cloudinary, l'echec ne dois rien casser, au pire l'image orpheline reste 
+    if (oldPublicId){
+      try {
+        await this.cloudinary.deleteImage(oldPublicId)
+      } catch (err) {
+        // On ne remonte pas l'erreur : la nouvelle photo est déjà en place. À revoir 
+      }
+    }
+    return { avatarUrl: result.secure_url}
+  }
+
 
   // ─── Suppression de compte (OTP + soft delete réversible 2 semaines) ──────────
 
