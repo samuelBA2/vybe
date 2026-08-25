@@ -19,4 +19,6 @@ it('raw PDF sans keepExtension : retire l’extension (fallback)', () => {
 it('URL sans segment /upload/ : lève une erreur explicite', () => {
     expect(() => publicIdFromUrl('https://example.com/foo.png')).toThrow('URL Cloudinary inattendue');
 });
-});
+
+
+})
