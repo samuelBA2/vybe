@@ -15,6 +15,17 @@ export const LOGIN_LOCK_DURATIONS_MS = [
   12 * 60 * 60 * 1000, // palier 3+ : 12 heures
 ];
 
+
+// Alphabet SANS caractères ambigus (pas de 0/O ni 1/I) : un code lisible,
+// dictable au téléphone sans confusion. 32 caractères.
+export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789';
+
+// ─── Agents de sécurité ───────────────────────────────────────────────────────
+// Nombre maximum d'agents ACTIFS par événement. Désactiver un agent
+// (active=false) libère un slot. Le frontend applique la même limite pour
+// désactiver le bouton « + ».
+export const MAX_AGENTS_PER_EVENT = 5;
+
 // ─── Upload de médias
 export const MAX_BYTES = 15 * 1024 * 1024 
 
@@ -27,6 +38,11 @@ export const ALLOWED_MIME = new Set<string>([
   'application/pdf',
 ]);
 
+// ─── Billetterie / commandes ──────────────────────────────────────────────────
+// Commission Vybe prélevée sur chaque commande, déduite du montant reversé à
+// l'organisateur (organizerAmount = totalAmount − platformFee).
+export const PLATFORM_FEE_RATE = 0.15 // 15%
+
 // ─── Photo de profil (avatar) ────────────────────────────────────────────────
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 Mo
 
@@ -37,7 +53,7 @@ export const AVATAR_ALLOWED_MIME = new Set<string>([
   'image/webp',
 ]);
 
-// Mappagr d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
+// Mappage d'un mime détecté vers le MediaType Prisma (source de vérité côté serveur)
 export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
   if (mime.startsWith('image/')) return 'IMAGE';
   if (mime === 'application/pdf') return 'DOCUMENT';

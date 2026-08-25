@@ -77,6 +77,25 @@ export class CloudinaryService {
     });
   }
 
+  async uploadRawBuffer( buffer: Buffer, folder: string, filename: string): Promise<UploadApiResponse> {
+    return new Promise((resolve, reject) => {
+      const upload = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          resource_type: 'raw',
+          public_id: filename, // Nom du fichier sans extension
+          format: 'pdf',// Forcer le format PDF pour les fichiers bruts
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          if (!result) return reject(new Error('Upload Cloudinary sans résultat.'));
+          resolve(result);
+        },
+      );
+      Readable.from(buffer).pipe(upload);
+    });
+  }
+
   async deleteImage(publicId: string) {
     return cloudinary.uploader.destroy(publicId);
   }
@@ -93,5 +112,9 @@ export class CloudinaryService {
           if (error) return reject(error);
           if (!result) return reject(new Error('Upload Cloudinary sans résultat.'));
           resolve(result);},); Readable.from(file.buffer).pipe(upload);})
+  }
+
+  async deleteAsset(publicId: string, resourceType: 'image' | 'raw' = 'image') {
+    return cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
   }
 }

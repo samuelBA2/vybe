@@ -9,6 +9,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { MailService } from 'src/mail/mail.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
+import { randomCode } from 'src/common/generate-code';
 
 // Limite globale de l'application : nombre maximum de billets pour un événement en mode limité.
 const MAX_TOTAL_CAPACITY = 50000;
@@ -65,6 +66,17 @@ export class EventsService {
     return event;
   }
 
+  private async generateUniqueReference(): Promise<string>{
+    for (let i = 0; i < 5; i++){
+      const candidate = randomCode('VYBE', 6);
+      const existing = await this.prisma.event.findUnique({
+        where: {  reference: candidate},
+      });
+      if (!existing) return candidate;
+    }
+    throw new Error('Impossible de générer une référence unique après 5 essais.')
+  }
+
   async createEvent(userId: string, dto: CreateEventDto) {
     const start = new Date(dto.startDate);
     const end = new Date(dto.endDate);
@@ -78,8 +90,8 @@ export class EventsService {
     if (end.getTime() <= start.getTime()) {
       throw new BadRequestException('La date de fin doit être postérieure à la date de début.',);
     }
-    if (deadline.getTime() > start.getTime()) {
-      throw new BadRequestException("La date limite d'achat ne peut pas dépasser la date de début.",);
+    if (deadline.getTime() > end.getTime()) {
+      throw new BadRequestException("La date limite d'achat ne peut pas dépasser la date de fin de l'événement.",);
     }
     if (dto.termsAccepted !== true) {
       throw new BadRequestException('Vous devez accepter les conditions.');
@@ -129,11 +141,14 @@ export class EventsService {
       // Tout est valide : on retient la capacité à persister sur l'événement.
       eventCapacity = dto.totalCapacity;
     }
+     // ── Référence publique unique (ex. "VYBE-XXXXX")
+    const reference = await this.generateUniqueReference();
 
     // ── Création transactionnelle (Event + médias + catégories) ──────
     const event = await this.prisma.event.create({
       data: {
-        title: dto.title,
+        title: dto.title,  
+        reference,
         description: dto.description,
         startDate: start,
         endDate: end,
@@ -237,6 +252,7 @@ export class EventsService {
         "Votre événement a été soumis à validation. L'équipe Vybe vous informera de sa décision.",
       eventId: event.id,
       status: event.status,
+      reference: event.reference,
     };
   }
 

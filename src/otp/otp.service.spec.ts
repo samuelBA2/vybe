@@ -105,7 +105,7 @@ describe('OtpService — stockage haché des OTP (audit M2)', () => {
 
     expect(prismaMock.otpVerification.update).toHaveBeenCalledWith({
       where: { id: 'otp-1' },
-      data: { attempts: 1 },
+      data: { attempts: { increment: 1 } },
     });
   });
 

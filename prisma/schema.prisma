@@ -101,6 +101,10 @@ model OtpVerification {
 // Événement
 model Event {
   id            String   @id @default(uuid())
+  // Numéro public lisible de l'événement, ex. "VYBE-67XC6F".
+  // Sert de poignée humaine (affichage, désignation de l'événement
+  // à la création d'un agent). L'isolation technique reste sur l'id.
+  reference     String   @unique
   title         String
   description   String
   startDate     DateTime
@@ -179,7 +183,7 @@ enum EventCategory {
 }
 
 enum EventStatus {
-  DRAFT
+  DRAFT  //event encours de creation 
   PENDING_REVIEW
   PUBLISHED
   REJECTED
@@ -242,9 +246,11 @@ model Ticket {
   qrStatus         QRStatus  @default(UNUSED)
   scannedAt        DateTime?
   scannedByAgentId String?
+  cancelledAt      DateTime?  // posé au passage en CANCELLED (brique d'annulation future) ; lu par GET /me/tickets pour la règle des 24h
 
   expiresAt        DateTime
   pdfUrl           String?
+  ticketImageUrl   String?   // URL Cloudinary du PNG composé (design + QR + ruban de catégorie)
   createdAt        DateTime  @default(now())
 
   @@index([qrToken])   // Index pour les lookups rapides de scan
@@ -262,14 +268,14 @@ model Agent {
   id          String    @id @default(uuid())
   firstname   String
   lastname    String
-  code        String    @unique //"AG-LJXW1"
+  hashCode    String    @unique // identifie l'agent avec un SHA-256 du code "AG-XXXXXXXX"  
   active      Boolean   @default(true)
   usedAt      DateTime?
   createdAt   DateTime  @default(now())
 
   eventId     String
-  event       Event    @relation(fields: [eventId], references: [id])
+  event       Event     @relation(fields: [eventId], references: [id])
 
   userId      String?   
-  user        User?    @relation(fields: [userId], references: [id])
+  user        User?     @relation(fields: [userId], references: [id])
 }

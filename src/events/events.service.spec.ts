@@ -46,7 +46,14 @@ describe('EventsService.createEvent', () => {
       createdBy: { id: 'user-1', email: 'u@x.com' },
     };
     prisma = {
-      event: { create: jest.fn().mockResolvedValue(createdEvent) },
+      event: {
+        create: jest.fn().mockResolvedValue(createdEvent),
+        // generateUniqueReference() interroge findUnique jusqu'à obtenir une
+        // référence libre ; null = aucune collision, la 1re tentative suffit.
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      // Les médias soumis sont marqués "attachés" pour échapper à la purge.
+      uploadedAsset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };
@@ -70,13 +77,23 @@ describe('EventsService.createEvent', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('refuse si purchaseDeadline > startDate', async () => {
+  it('refuse si purchaseDeadline > endDate', async () => {
+    // endDate = 23:00 → une limite d'achat après la fin (lendemain 00:00) est refusée.
     await expect(
       service.createEvent(
         'user-1',
-        baseDto({ purchaseDeadline: '2030-01-01T21:00:00Z' }),
+        baseDto({ purchaseDeadline: '2030-01-02T00:00:00Z' }),
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('accepte purchaseDeadline entre startDate et endDate (vente pendant l’événement)', async () => {
+    // 21:00 est après le début (20:00) mais avant la fin (23:00) : désormais autorisé.
+    const res = await service.createEvent(
+      'user-1',
+      baseDto({ purchaseDeadline: '2030-01-01T21:00:00Z' }),
+    );
+    expect(res.eventId).toBe('evt-1');
   });
 
   it('accepte un événement sans affiche (0 affiche autorisée)', async () => {
@@ -144,7 +161,10 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
           title: 'Soirée',
           createdBy: { email: 'u@x.com' },
         }),
+        // Référence unique : aucune collision → 1re tentative acceptée.
+        findUnique: jest.fn().mockResolvedValue(null),
       },
+      uploadedAsset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };

@@ -16,6 +16,8 @@ import { EventsModule } from './events/events.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { UploadsModule } from './uploads/uploads.module';
+import { AgentModule } from './agent/agent.module';
+import { OrderModule } from './orders/Order.module';
 
 @Module({
   imports: [
@@ -41,6 +43,8 @@ import { UploadsModule } from './uploads/uploads.module';
     EventsModule,
     CloudinaryModule,
     UploadsModule,
+    AgentModule,
+    OrderModule
   ],
   controllers: [AppController],
   providers: [
