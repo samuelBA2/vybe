@@ -1,11 +1,16 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { CloudinaryService } from './cloudinary.service';
 import { Writable } from 'stream';
 
 const uploadStreamMock = jest.fn();
 jest.mock('cloudinary', () => ({
-  v2: { uploader: { upload_stream: (...args: any[]) => uploadStreamMock(...args) } },
+  v2: {
+    uploader: {
+      upload_stream: (...args: any[]) => uploadStreamMock(...args),
+      destroy: jest.fn().mockResolvedValue({ result: 'ok' }),
+    },
+  },
 }));
+import { v2 as cloudinary } from 'cloudinary';
 
 describe('CloudinaryService.uploadRawBuffer', () => {
   beforeEach(() => {
@@ -25,5 +30,22 @@ describe('CloudinaryService.uploadRawBuffer', () => {
     expect(opts.resource_type).toBe('raw');
     expect(opts.format).toBe('pdf');
     expect(opts.public_id).toBe('ticket-1');
+  });
+});
+
+describe('CloudinaryService.deleteAsset', () => {
+  const service = new CloudinaryService();
+  const destroy = cloudinary.uploader.destroy as jest.Mock;
+
+  beforeEach(() => destroy.mockClear());
+
+  it('resource_type raw pour un PDF', async () => {
+    await service.deleteAsset('tickets/ticket-xyz.pdf', 'raw');
+    expect(destroy).toHaveBeenCalledWith('tickets/ticket-xyz.pdf', { resource_type: 'raw' });
+  });
+
+  it('resource_type image par défaut', async () => {
+    await service.deleteAsset('tickets/abc123');
+    expect(destroy).toHaveBeenCalledWith('tickets/abc123', { resource_type: 'image' });
   });
 });

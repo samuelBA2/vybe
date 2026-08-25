@@ -113,4 +113,8 @@ export class CloudinaryService {
           if (!result) return reject(new Error('Upload Cloudinary sans résultat.'));
           resolve(result);},); Readable.from(file.buffer).pipe(upload);})
   }
+
+  async deleteAsset(publicId: string, resourceType: 'image' | 'raw' = 'image') {
+    return cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+  }
 }
