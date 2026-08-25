@@ -82,9 +82,17 @@ Après vérif de propriété (event trouvé + créateur), approche **hybride** :
 4. **Timeline** —
    `prisma.ticket.findMany({ where: { qrStatus: 'USED', ticketCategory: { eventId } }, select: { scannedAt: true } })`.
    Bucketing horaire en JS : pour chaque `scannedAt`, tronquer à l'heure via
-   `new Date(d); d.setMinutes(0, 0, 0)` (heure locale serveur), agréger par clé ISO
-   dans une `Map`, puis produire `[{ hour: ISO, count }]` trié par `hour` croissant.
-   `scannedAt` null (théorique pour un USED) ignoré.
+   `new Date(d); d.setUTCMinutes(0, 0, 0)` (**UTC**, voir arbitrage ci-dessous), agréger
+   par clé ISO dans une `Map`, puis produire `[{ hour: ISO, count }]` trié par `hour`
+   croissant. `scannedAt` null (théorique pour un USED) ignoré.
+
+   > **Arbitrage fuseau horaire (2026-08-24)** — la version initiale de cette spec
+   > tronquait à l'heure **locale serveur** (`setMinutes`). L'implémentation retenue
+   > tronque en **UTC** (`setUTCMinutes`) : résultat déterministe et testable
+   > indépendamment du fuseau de la machine de déploiement (l'heure locale serveur
+   > dépend du fuseau de l'hôte, ce qui est fragile en prod). Les `hour` renvoyés
+   > sont donc des débuts d'heure **UTC** ; c'est au front de convertir en heure
+   > locale à l'affichage.
 
 ## Forme de réponse — `src/agent/dto/ScanDashboard.dto.ts`
 
@@ -100,7 +108,7 @@ interface ScanDashboardResponseDto {
   };
   byCategory: { name: string; sold: number; scanned: number; remaining: number }[];
   byAgent: { agentId: string; name: string; scanned: number }[];
-  timeline: { hour: string; count: number }[]; // hour = ISO début d'heure
+  timeline: { hour: string; count: number }[]; // hour = ISO début d'heure (UTC)
 }
 ```
 
