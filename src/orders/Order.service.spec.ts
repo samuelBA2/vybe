@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -16,22 +17,23 @@ describe('OrderService', () => {
     ticket: { createMany: jest.Mock };
   };
   let prisma: {
-    ticketCategory: { findUnique: jest.Mock };
-    ticket: { findMany: jest.Mock}
+    ticketCategory: { findMany: jest.Mock };
+    ticket: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let ticketAssets: { generateAssetsForOrder: jest.Mock };
 
   beforeEach(() => {
     tx = {
-      $executeRaw: jest.fn(),
-      order: { create: jest.fn() },
-      ticket: { createMany: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      order: { create: jest.fn().mockResolvedValue({ id: 'order-1' }) },
+      ticket: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     prisma = {
-      ticketCategory: { findUnique: jest.fn() },
+      ticketCategory: { findMany: jest.fn() },
       ticket: { findMany: jest.fn().mockResolvedValue([]) },
       // $transaction exécute le callback en lui injectant notre faux tx.
+      // Un throw du callback se propage (en vrai, Prisma annulerait la transaction).
       $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
     };
     ticketAssets = { generateAssetsForOrder: jest.fn().mockResolvedValue(undefined) };
@@ -41,6 +43,7 @@ describe('OrderService', () => {
   // Catégorie valide par défaut : PUBLISHED, deadline future, stock large.
   const category = (over: Partial<any> = {}) => ({
     id: 'cat-1',
+    name: 'Standard',
     price: 100,
     maxPerOrder: 10,
     totalStock: 50,
@@ -53,118 +56,136 @@ describe('OrderService', () => {
     ...over,
   });
 
-  const dto = (over: Partial<any> = {}) => ({
-    ticketCategoryId: 'cat-1',
-    quantity: 2,
-    ...over,
-  });
+  // Panier à une seule ligne par défaut.
+  const dto = (items: any[] = [{ ticketCategoryId: 'cat-1', quantity: 2 }]) => ({ items });
 
   it('catégorie introuvable → 404, pas de transaction', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(null);
+    prisma.ticketCategory.findMany.mockResolvedValue([]); // aucune catégorie ne matche
     await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('événement non PUBLISHED → 403, pas de transaction', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(
+    prisma.ticketCategory.findMany.mockResolvedValue([
       category({ event: { status: 'PENDING_REVIEW', purchaseDeadline: new Date(Date.now() + 3_600_000), endDate: new Date() } }),
-    );
+    ]);
     await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('ventes clôturées (purchaseDeadline dépassée) → 403', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(
+    prisma.ticketCategory.findMany.mockResolvedValue([
       category({ event: { status: 'PUBLISHED', purchaseDeadline: new Date(Date.now() - 1000), endDate: new Date() } }),
-    );
+    ]);
     await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('quantité > maxPerOrder → 403', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(category({ maxPerOrder: 5 }));
-    await expect(service.createOrder('user-1', dto({ quantity: 6 }))).rejects.toBeInstanceOf(ForbiddenException);
+    prisma.ticketCategory.findMany.mockResolvedValue([category({ maxPerOrder: 5 })]);
+    await expect(
+      service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 6 }])),
+    ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('stock insuffisant (réservation atomique = 0 ligne) → 409, aucune commande créée', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(category());
+  it('catégorie en double dans le panier → 400, pas de transaction', async () => {
+    await expect(
+      service.createOrder('user-1', dto([
+        { ticketCategoryId: 'cat-1', quantity: 1 },
+        { ticketCategoryId: 'cat-1', quantity: 2 },
+      ])),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.ticketCategory.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('stock insuffisant (réservation = 0 ligne) → 409, aucune commande créée', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
     tx.$executeRaw.mockResolvedValue(0); // la garde SQL n'a touché aucune ligne
     await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(ConflictException);
     expect(tx.order.create).not.toHaveBeenCalled();
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
   });
 
-  it('succès → réserve, crée la commande (montants + frais 15%) et N billets', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(category({ price: 100 }));
-    tx.$executeRaw.mockResolvedValue(1); // réservation OK
-    tx.order.create.mockResolvedValue({ id: 'order-1' });
-    tx.ticket.createMany.mockResolvedValue({ count: 2 });
-    // La réponse relit les billets (avec leurs URLs) après le commit.
+  it("ATOMICITÉ : 2ᵉ catégorie épuisée → 409 nommant la catégorie, tout est annulé", async () => {
+    const catA = category({ id: 'cat-1', name: 'Standard' });
+    const catB = category({ id: 'cat-2', name: 'VIP' });
+    prisma.ticketCategory.findMany.mockResolvedValue([catA, catB]);
+    // 1ʳᵉ réservation OK, 2ᵉ épuisée.
+    tx.$executeRaw.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+
+    await expect(
+      service.createOrder('user-1', dto([
+        { ticketCategoryId: 'cat-1', quantity: 1 },
+        { ticketCategoryId: 'cat-2', quantity: 1 },
+      ])),
+    ).rejects.toThrow('Stock insuffisant : VIP');
+
+    // La 1ʳᵉ commande a bien été tentée dans la transaction ; le throw sur la 2ᵉ
+    // provoque (en réel) le rollback de TOUT le panier — aucune 2ᵉ commande créée.
+    expect(tx.order.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('succès multi-catégories → une commande par ligne (montants + frais 15%) et les billets', async () => {
+    const catA = category({ id: 'cat-1', name: 'Standard', price: 100 });
+    const catB = category({ id: 'cat-2', name: 'VIP', price: 50 });
+    prisma.ticketCategory.findMany.mockResolvedValue([catA, catB]);
+    tx.order.create
+      .mockResolvedValueOnce({ id: 'order-1' })
+      .mockResolvedValueOnce({ id: 'order-2' });
     prisma.ticket.findMany.mockResolvedValue([
       { qrToken: 'q1', pdfUrl: null, ticketImageUrl: null },
       { qrToken: 'q2', pdfUrl: null, ticketImageUrl: null },
+      { qrToken: 'q3', pdfUrl: null, ticketImageUrl: null },
     ]);
 
-    const res = await service.createOrder('user-1', dto({ quantity: 2 }));
+    const res = await service.createOrder('user-1', dto([
+      { ticketCategoryId: 'cat-1', quantity: 2 },
+      { ticketCategoryId: 'cat-2', quantity: 1 },
+    ]));
 
-    // Montants : totalAmount = 2×100 = 200 ; fee = 200×0.15 = 30 ; organizer = 170.
     expect(PLATFORM_FEE_RATE).toBe(0.15);
-    expect(tx.order.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          userId: 'user-1',
-          ticketCategoryId: 'cat-1',
-          quantity: 2,
-          unitPrice: 100,
-          totalAmount: 200,
-          platformFee: 30,
-          organizerAmount: 170,
-          paymentStatus: 'PAID',
-        }),
+    // cat-1 : 2×100 = 200, fee 30, org 170.
+    expect(tx.order.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      data: expect.objectContaining({
+        userId: 'user-1', ticketCategoryId: 'cat-1', quantity: 2,
+        totalAmount: 200, platformFee: 30, organizerAmount: 170, paymentStatus: 'PAID',
       }),
-    );
+    }));
+    // cat-2 : 1×50 = 50, fee 7.5, org 42.5.
+    expect(tx.order.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      data: expect.objectContaining({
+        ticketCategoryId: 'cat-2', quantity: 1,
+        totalAmount: 50, platformFee: 7.5, organizerAmount: 42.5,
+      }),
+    }));
+    // Billets créés pour chaque ligne (2 puis 1).
+    expect(tx.ticket.createMany).toHaveBeenCalledTimes(2);
+    expect(tx.ticket.createMany.mock.calls[0][0].data).toHaveLength(2);
+    expect(tx.ticket.createMany.mock.calls[1][0].data).toHaveLength(1);
 
-    // N billets, chacun rattaché à la commande avec un qrToken et l'expiry = fin d'événement.
-    const createManyArg = tx.ticket.createMany.mock.calls[0][0];
-    expect(createManyArg.data).toHaveLength(2);
-    expect(createManyArg.data[0]).toEqual(
-      expect.objectContaining({ orderId: 'order-1', ticketCategoryId: 'cat-1' }),
-    );
-    expect(createManyArg.data[0].qrToken).toEqual(expect.any(String));
-
-    // Deux qrToken distincts (aléatoire cryptographique).
-    expect(createManyArg.data[0].qrToken).not.toBe(createManyArg.data[1].qrToken);
-
-    // Réponse : la commande + les qrToken générés.
-    expect(res.order).toEqual({ id: 'order-1' });
-    expect(res.tickets).toHaveLength(2);
-    expect(res.tickets[0]).toHaveProperty('qrToken');
+    expect(res.orderIds).toEqual(['order-1', 'order-2']);
+    expect(res.tickets).toHaveLength(3);
   });
 
-  it('déclenche la génération des visuels en post-commit (best-effort)', async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(category());
-    tx.$executeRaw.mockResolvedValue(1);
+  it('déclenche la génération des visuels par commande, en post-commit', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category({ id: 'cat-1', name: 'Standard' })]);
     tx.order.create.mockResolvedValue({ id: 'order-42' });
-    tx.ticket.createMany.mockResolvedValue({ count: 2 });
     prisma.ticket.findMany.mockResolvedValue([{ qrToken: 'q', pdfUrl: null, ticketImageUrl: null }]);
 
-    await service.createOrder('user-1', dto());
+    await service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 2 }]));
 
-    // La génération est appelée avec l'id de la commande, APRÈS le commit.
     expect(ticketAssets.generateAssetsForOrder).toHaveBeenCalledWith('order-42');
   });
 
   it("un échec de la génération ne fait pas échouer l'achat", async () => {
-    prisma.ticketCategory.findUnique.mockResolvedValue(category());
-    tx.$executeRaw.mockResolvedValue(1);
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
     tx.order.create.mockResolvedValue({ id: 'order-99' });
-    tx.ticket.createMany.mockResolvedValue({ count: 1 });
     prisma.ticket.findMany.mockResolvedValue([{ qrToken: 'q', pdfUrl: null, ticketImageUrl: null }]);
     ticketAssets.generateAssetsForOrder.mockRejectedValue(new Error('génération KO'));
 
-    // L'achat aboutit malgré l'échec de la génération.
-    const res = await service.createOrder('user-1', dto({ quantity: 1 }));
-    expect(res.order).toEqual({ id: 'order-99' });
+    const res = await service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 1 }]));
+    expect(res.orderIds).toEqual(['order-99']);
   });
 });
