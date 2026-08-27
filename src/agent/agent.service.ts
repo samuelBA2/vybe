@@ -171,6 +171,12 @@ export class AgentService {
       return { name: c.name, sold: c.soldCount, scanned: catScanned, remaining: c.soldCount - catScanned };
     });
 
+    // Capacité totale de l'event : null si au moins une catégorie est illimitée
+    // (totalStock null), sinon la somme des plafonds. Alimente le KPI « Vendus / capacité ».
+    const capacity = categories.some((c) => c.totalStock == null)
+      ? null
+      : categories.reduce((sum, c) => sum + (c.totalStock ?? 0), 0);
+
     // 3. Par agent
     const usedByAgent = await this.prisma.ticket.groupBy({
       by: ['scannedByAgentId'],
@@ -213,7 +219,7 @@ export class AgentService {
 
     return {
       event: { reference: event.reference, title: event.title },
-      totals: { total, scanned, unused, cancelled, entryRate },
+      totals: { total, scanned, unused, cancelled, entryRate, capacity },
       byCategory,
       byAgent,
       timeline,
