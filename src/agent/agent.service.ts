@@ -104,7 +104,8 @@ export class AgentService {
     if (ticket.expiresAt < new Date()) throw new ForbiddenException('Billet expiré')
 
     if (ticket.qrStatus === 'CANCELLED') throw new ForbiddenException('Billet déjà annulé.')
-    if (ticket.qrStatus === 'USED') throw new ConflictException (`Billet déjà scanné le ${ticket.scannedAt?.toISOString()}.`)
+    // Date exposée en champ structuré (ISO) : le client la formate en heure locale.
+    if (ticket.qrStatus === 'USED') throw new ConflictException({ message: 'Billet déjà scanné.', scannedAt: ticket.scannedAt?.toISOString() })
 
     const res = await this.prisma.ticket.updateMany({
       where: { qrToken, qrStatus: 'UNUSED' },

@@ -213,12 +213,15 @@ describe('AgentService', () => {
       expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
     });
 
-    it('billet déjà scanné (USED) → 409', async () => {
+    it('billet déjà scanné (USED) → 409 avec scannedAt (ISO) structuré', async () => {
       prisma.agent.findUnique.mockResolvedValue(activeAgent);
       prisma.ticket.findUnique.mockResolvedValue(
         ticket({ qrStatus: 'USED', scannedAt: new Date('2026-08-11T10:00:00.000Z') }),
       );
-      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ConflictException);
+      // La réponse porte le message + la date brute (ISO) pour un formatage local côté client.
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toMatchObject({
+        response: { message: 'Billet déjà scanné.', scannedAt: '2026-08-11T10:00:00.000Z' },
+      });
       expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
     });
 
