@@ -1,13 +1,16 @@
+import { NotFoundException } from '@nestjs/common';
 import { MyTicketsService } from './MyTickets.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 
 describe('MyTicketsService', () => {
   let service: MyTicketsService;
-  let prisma: { ticket: { findMany: jest.Mock } };
+  let prisma: { ticket: { findMany: jest.Mock; findFirst: jest.Mock } };
   let ticketAssets: { regenerateMissingForUser: jest.Mock };
 
   beforeEach(() => {
-    prisma = { ticket: { findMany: jest.fn().mockResolvedValue([]) } };
+    prisma = {
+      ticket: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
+    };
     ticketAssets = { regenerateMissingForUser: jest.fn().mockResolvedValue(undefined) };
     service = new MyTicketsService(
       prisma as unknown as PrismaService,
@@ -150,6 +153,25 @@ describe('MyTicketsService', () => {
       scopedRows([row({ id: 't1', pdfUrl: null })]);
       ticketAssets.regenerateMissingForUser.mockRejectedValue(new Error('KO'));
       await expect(service.getMyTickets('user-1')).resolves.toBeDefined();
+    });
+  });
+
+  describe('getQrToken', () => {
+    it('propriétaire → renvoie le token (requête jointe Ticket→Order.userId)', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({ qrToken: 'tok-123' });
+      const res = await service.getQrToken('user-1', 't1');
+      expect(res).toEqual({ qrToken: 'tok-123' });
+      expect(prisma.ticket.findFirst).toHaveBeenCalledWith({
+        where: { id: 't1', order: { userId: 'user-1' } },
+        select: { qrToken: true },
+      });
+    });
+
+    it('non-propriétaire (findFirst null) → 404, pas 403', async () => {
+      prisma.ticket.findFirst.mockResolvedValue(null);
+      await expect(service.getQrToken('intrus', 't1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

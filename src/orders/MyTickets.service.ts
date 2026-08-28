@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { QRStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { TicketAssetService } from 'src/ticket-asset/ticket-asset.service';
@@ -133,5 +133,16 @@ export class MyTicketsService {
 
     // L'ordre d'insertion de la Map reflète déjà l'orderBy SQL
     return [...byEvent.values()];
+    }
+
+    // Token brut du billet, réservé à son propriétaire. Requête jointe unique
+    // (Ticket→Order.userId) ; non-propriétaire → 404 (aucune fuite d'existence).
+    async getQrToken(userId: string, ticketId: string): Promise<{ qrToken: string }> {
+        const ticket = await this.prisma.ticket.findFirst({
+            where: { id: ticketId, order: { userId } },
+            select: { qrToken: true },
+        });
+        if (!ticket) throw new NotFoundException('Billet introuvable.');
+        return { qrToken: ticket.qrToken };
     }
 }
