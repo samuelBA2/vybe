@@ -157,7 +157,7 @@ export class AgentService {
     // 2. Par catégorie
     const categories = await this.prisma.ticketCategory.findMany({
       where: { eventId },
-      select: { id: true, name: true, soldCount: true, totalStock: true },
+      select: { id: true, name: true, soldCount: true },
     });
     const usedByCategory = await this.prisma.ticket.groupBy({
       by: ['ticketCategoryId'],
@@ -171,11 +171,8 @@ export class AgentService {
       return { name: c.name, sold: c.soldCount, scanned: catScanned, remaining: c.soldCount - catScanned };
     });
 
-    // Capacité totale de l'event : null si au moins une catégorie est illimitée
-    // (totalStock null), sinon la somme des plafonds. Alimente le KPI « Vendus / capacité ».
-    const capacity = categories.some((c) => c.totalStock == null)
-      ? null
-      : categories.reduce((sum, c) => sum + (c.totalStock ?? 0), 0);
+    // Capacité totale = la jauge annoncée sur l'événement (null = billetterie illimitée).
+    const capacity = event.totalCapacity;
 
     // 3. Par agent
     const usedByAgent = await this.prisma.ticket.groupBy({

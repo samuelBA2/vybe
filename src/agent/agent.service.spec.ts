@@ -291,6 +291,7 @@ describe('AgentService', () => {
         reference: 'VYBE-8JGBLV',
         title: 'Fête',
         createdById: 'owner',
+        totalCapacity: null,
       });
       prisma.ticket.groupBy
         // statuts globaux
@@ -331,27 +332,27 @@ describe('AgentService', () => {
       expect(res.byAgent).toEqual([{ agentId: 'a1', name: 'Ada Lovelace', scanned: 3 }]);
     });
 
-    it('capacity = somme des totalStock quand toutes les catégories sont plafonnées', async () => {
+    it('capacity reflète event.totalCapacity (stock limité)', async () => {
       prisma.event.findUnique.mockResolvedValue({
         id: 'e1',
         reference: 'VYBE-8JGBLV',
         title: 'Fête',
         createdById: 'owner',
+        totalCapacity: 500,
       });
       prisma.ticket.groupBy
         .mockResolvedValueOnce([{ qrStatus: 'UNUSED', _count: 4 }])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([]);
       prisma.ticketCategory.findMany.mockResolvedValue([
-        { id: 'c1', name: 'VIP', soldCount: 4, totalStock: 200 },
-        { id: 'c2', name: 'Standard', soldCount: 0, totalStock: 300 },
+        { id: 'c1', name: 'VIP', soldCount: 4 },
       ]);
       prisma.agent.findMany.mockResolvedValue([]);
       prisma.ticket.findMany.mockResolvedValue([]);
 
       const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
 
-      expect(res.totals.capacity).toBe(500); // 200 + 300
+      expect(res.totals.capacity).toBe(500);
     });
 
     it('cas vide (0 scan) → tableaux vides, entryRate 0 sans division par zéro', async () => {
@@ -360,6 +361,7 @@ describe('AgentService', () => {
         reference: 'VYBE-8JGBLV',
         title: 'Fête',
         createdById: 'owner',
+        totalCapacity: null,
       });
       prisma.ticket.groupBy
         .mockResolvedValueOnce([])
@@ -371,7 +373,7 @@ describe('AgentService', () => {
 
       const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
 
-      expect(res.totals).toEqual({ total: 0, scanned: 0, unused: 0, cancelled: 0, entryRate: 0, capacity: 0 });
+      expect(res.totals).toEqual({ total: 0, scanned: 0, unused: 0, cancelled: 0, entryRate: 0, capacity: null });
       expect(res.byCategory).toEqual([]);
       expect(res.byAgent).toEqual([]);
       expect(res.timeline).toEqual([]);
