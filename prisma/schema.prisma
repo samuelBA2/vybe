@@ -249,8 +249,6 @@ model Ticket {
   cancelledAt      DateTime?  // posé au passage en CANCELLED (brique d'annulation future) ; lu par GET /me/tickets pour la règle des 24h
 
   expiresAt        DateTime
-  pdfUrl           String?
-  ticketImageUrl   String?   // URL Cloudinary du PNG composé (design + QR + ruban de catégorie)
   createdAt        DateTime  @default(now())
 
   @@index([qrToken])   // Index pour les lookups rapides de scan
