@@ -147,4 +147,25 @@ export class MyTicketsService {
         if (!ticket) throw new NotFoundException('Billet introuvable.');
         return { qrToken: ticket.qrToken };
     }
+
+    // Données jointes pour composer le billet à la demande (route /download).
+    // Même garde d'ownership qu'ailleurs (Ticket→Order.userId en une requête) :
+    // non-propriétaire → 404, jamais 403 (pas de fuite d'existence du billet).
+    async getTicketForRender(userId: string, ticketId: string) {
+        const t = await this.prisma.ticket.findFirst({
+            where: { id: ticketId, order: { userId } },
+            select: {
+                qrToken: true,
+                ticketCategory: {
+                    select: {
+                        name: true,
+                        ticketDesignUrl: true,
+                        event: { select: { title: true, category: true, startDate: true } },
+                    },
+                },
+            },
+        });
+        if (!t) throw new NotFoundException('Billet introuvable.');
+        return t;
+    }
 }

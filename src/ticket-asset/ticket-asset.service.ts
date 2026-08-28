@@ -16,6 +16,17 @@ export type TicketFields = {
     placeLabel: string;    // ex: 'Standard'
 };
 
+// Entrée de rendu à la demande (route /download) : données brutes issues de la
+// requête jointe côté MyTicketsService, pas de dépendance Prisma ici.
+export type RenderInput = {
+    qrToken: string;
+    eventTitle: string;
+    eventCategory: string;
+    startDate: Date;
+    categoryName: string;
+    designUrl: string;
+};
+
 // Billet avec sa catégorie et son événement, tel que chargé pour la génération.
 type TicketWithEvent = Prisma.TicketGetPayload<{
     include: { ticketCategory: { include: { event: true } } };
@@ -197,11 +208,11 @@ function escapeXml(s: string): string {
 
         async buildTicketPdf(ticketPng: Buffer): Promise<Buffer> {
             const meta = await sharp(ticketPng).metadata();
-            const w = meta.width ?? 0; // valeur finale non connue avant le rendu 
+            const w = meta.width ?? 0; // valeur finale non connue avant le rendu
             const h = meta.height ?? 0;
             return new Promise<Buffer>((resolve, reject) => {
                 const doc = new PDFDocument({ size: [w, h], margin: 0 });
-                const chunks: Buffer[] = []; 
+                const chunks: Buffer[] = [];
 
                 doc.on('data', (chunk) => chunks.push(chunk));
                 doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -209,6 +220,44 @@ function escapeXml(s: string): string {
                 doc.image(ticketPng, 0, 0, { width: w, height: h });
                 doc.end();
             })
+        }
+
+        // Fond neutre brandé si le design est injoignable (P4) : mieux vaut un billet
+        // livrable avec un bandeau uni qu'une 500 côté utilisateur qui veut son entrée.
+        private async neutralBackground(width: number, height: number): Promise<Buffer> {
+            return sharp({ create: { width, height, channels: 3, background: '#0b0b12' } }).png().toBuffer();
+        }
+
+        // Le rendu à la demande est synchrone avec la requête HTTP (pas de best-effort
+        // en tâche de fond ici) : un design injoignable ne doit jamais faire échouer
+        // le téléchargement, donc on retombe sur le fond neutre plutôt que de propager.
+        private async fetchDesignOrFallback(url: string): Promise<Buffer> {
+            try {
+                return await this.fetchDesign(url);
+            } catch (e) {
+                this.logger.warn(`Design injoignable, fond neutre utilisé : ${e instanceof Error ? e.message : String(e)}`);
+                return this.neutralBackground(750, 300); // dimensions de l'en-tête cover
+            }
+        }
+
+        // Compose le PNG du billet à la demande (design + QR), sans upload ni stockage :
+        // le fichier n'existe que le temps de la réponse HTTP (voir route /download).
+        async renderTicketPng(input: RenderInput): Promise<Buffer> {
+            const fields: TicketFields = {
+                qrToken: input.qrToken,
+                eventCategory: input.eventCategory,
+                eventTitle: input.eventTitle,
+                dateLabel: this.dateLabel(input.startDate),
+                timeLabel: this.timeLabel(input.startDate),
+                placeLabel: input.categoryName,
+            };
+            const design = await this.fetchDesignOrFallback(input.designUrl);
+            return this.buildTicketImage(design, fields);
+        }
+
+        // Même logique que renderTicketPng, encapsulée en PDF via buildTicketPdf.
+        async renderTicketPdf(input: RenderInput): Promise<Buffer> {
+            return this.buildTicketPdf(await this.renderTicketPng(input));
         }
 
     }

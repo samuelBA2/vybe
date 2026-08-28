@@ -50,7 +50,40 @@ describe('TicketAssetService.buildTicketImage', () => {
     });
     expect(Buffer.isBuffer(png)).toBe(true);
   });
+});
 
+describe('TicketAssetService.renderTicketPng — fallback fond neutre', () => {
+  const service = new TicketAssetService({} as any, {} as any);
+  const originalFetch = global.fetch;
+
+  beforeEach(async () => {
+    (QRCode.toBuffer as jest.Mock).mockReset();
+    (QRCode.toBuffer as jest.Mock).mockResolvedValue(
+      await sharp({ create: { width: 10, height: 10, channels: 3, background: '#000000' } }).png().toBuffer(),
+    );
+  });
+
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it('bascule sur le fond neutre quand le design est injoignable, et renvoie un PNG non vide', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 }) as any;
+
+    const png = await service.renderTicketPng({
+      qrToken: baseFields.qrToken,
+      eventCategory: baseFields.eventCategory,
+      eventTitle: baseFields.eventTitle,
+      startDate: new Date('2026-06-27T22:00:00'),
+      categoryName: 'Standard',
+      designUrl: 'https://d/introuvable.png',
+    });
+
+    expect(Buffer.isBuffer(png)).toBe(true);
+    expect(png.length).toBeGreaterThan(0);
+    const meta = await sharp(png).metadata();
+    expect(meta.width).toBe(750);
+    expect(meta.height).toBe(1040);
+  });
+});
 
 describe('TicketAssetService.buildTicketPdf', () => {
   const service = new TicketAssetService({} as any, {} as any);
@@ -176,5 +209,4 @@ describe('TicketAssetService.regenerateMissingForUser', () => {
     resolveFind!([]);
     await p1;
   });
-});
 });

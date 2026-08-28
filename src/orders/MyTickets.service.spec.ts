@@ -176,4 +176,11 @@ describe('MyTicketsService', () => {
       );
     });
   });
+
+  describe('getTicketForRender', () => {
+    it('non-propriétaire → 404', async () => {
+      prisma.ticket.findFirst.mockResolvedValue(null);
+      await expect(service.getTicketForRender('intrus', 't1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
 });
