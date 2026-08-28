@@ -198,20 +198,41 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
       ],
       ticketCategories: [
         { name: 'Standard', price: 10, ticketDesignUrl: 'd1', totalStock: 20000 },
-        { name: 'VIP', price: 50, ticketDesignUrl: 'd2', totalStock: 30000 },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'd2', totalStock: 150 },
       ],
       ...overrides,
     };
   }
 
-  it('illimité : totalCapacity et tous les totalStock sont mis à null', async () => {
+  it('illimité : base (index 0) à null, spéciales gardent leur plafond', async () => {
     const dto = limitedDto({ unlimitedStock: true, totalCapacity: undefined });
     await service.createEvent('user-1', dto as any);
     const arg = prisma.event.create.mock.calls[0][0];
     expect(arg.data.totalCapacity).toBeNull();
-    expect(
-      arg.data.ticketCategories.create.every((c: any) => c.totalStock === null),
-    ).toBe(true);
+    const stocks = arg.data.ticketCategories.create.map((c: any) => c.totalStock);
+    expect(stocks).toEqual([null, 150]); // Standard illimitée, VIP plafonnée
+  });
+
+  it('illimité : une spéciale sans totalStock → 400', async () => {
+    const dto = limitedDto({
+      unlimitedStock: true,
+      totalCapacity: undefined,
+      ticketCategories: [
+        { name: 'Standard', price: 10, ticketDesignUrl: 'd1' },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'd2' }, // spéciale sans plafond
+      ],
+    });
+    await expect(service.createEvent('user-1', dto as any)).rejects.toThrow(BadRequestException);
+  });
+
+  it('une spéciale > 150 → 400 (illimité comme limité)', async () => {
+    const dto = limitedDto({
+      ticketCategories: [
+        { name: 'Standard', price: 10, ticketDesignUrl: 'd1', totalStock: 100 },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'd2', totalStock: 200 }, // > 150
+      ],
+    });
+    await expect(service.createEvent('user-1', dto as any)).rejects.toThrow(BadRequestException);
   });
 
   it('limité sans totalCapacity → 400', async () => {
@@ -233,6 +254,14 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
     );
   });
 
+  it('limité avec la base > 50000 → 400', async () => {
+    const dto = limitedDto({
+      totalCapacity: 50000,
+      ticketCategories: [{ name: 'Standard', price: 10, ticketDesignUrl: 'd1', totalStock: 50001 }],
+    });
+    await expect(service.createEvent('user-1', dto as any)).rejects.toThrow(BadRequestException);
+  });
+
   it('limité avec une catégorie sans totalStock → 400', async () => {
     const dto = limitedDto({
       ticketCategories: [
@@ -246,10 +275,10 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
 
   it('limité avec somme > capacité → 400 avec le message exact', async () => {
     const dto = limitedDto({
-      totalCapacity: 50000,
+      totalCapacity: 40000,
       ticketCategories: [
-        { name: 'Standard', price: 10, ticketDesignUrl: 'd1', totalStock: 30000 },
-        { name: 'VIP', price: 50, ticketDesignUrl: 'd2', totalStock: 25000 },
+        { name: 'Standard', price: 10, ticketDesignUrl: 'd1', totalStock: 40000 }, // base ≤ 50000
+        { name: 'VIP', price: 50, ticketDesignUrl: 'd2', totalStock: 150 }, // spéciale ≤ 150
       ],
     });
     await expect(service.createEvent('user-1', dto as any)).rejects.toThrow(
@@ -262,6 +291,6 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
     const arg = prisma.event.create.mock.calls[0][0];
     expect(arg.data.totalCapacity).toBe(50000);
     const stocks = arg.data.ticketCategories.create.map((c: any) => c.totalStock);
-    expect(stocks).toEqual([20000, 30000]);
+    expect(stocks).toEqual([20000, 150]);
   });
 });
