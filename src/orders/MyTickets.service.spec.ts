@@ -21,8 +21,6 @@ describe('MyTicketsService', () => {
   const row = (over: any = {}) => ({
     id: over.id ?? 't1',
     qrStatus: over.qrStatus ?? 'UNUSED',
-    ticketImageUrl: 'ticketImageUrl' in over ? over.ticketImageUrl : 'png-url',
-    pdfUrl: 'pdfUrl' in over ? over.pdfUrl : 'pdf-url',
     expiresAt: over.expiresAt ?? new Date(now + 48 * HOUR),
     cancelledAt: over.cancelledAt ?? null,
     ticketCategory: {
@@ -76,8 +74,6 @@ describe('MyTicketsService', () => {
       id: 't1',
       categoryName: 'VIP',
       qrStatus: 'UNUSED',
-      ticketImageUrl: 'png-url',
-      pdfUrl: 'pdf-url',
       expiresAt: expect.any(Date),
       cancelledAt: null,
       ticketDesignUrl: 'design-url',
@@ -85,12 +81,10 @@ describe('MyTicketsService', () => {
     expect(evt.tickets[0]).not.toHaveProperty('qrToken');
   });
 
-  it('poster absent → posterUrl null ; visuels non générés → urls null', async () => {
-    scopedRows([row({ id: 't1', mediaFiles: [], ticketImageUrl: null, pdfUrl: null })]);
+  it('poster absent → posterUrl null', async () => {
+    scopedRows([row({ id: 't1', mediaFiles: [] })]);
     const res = await service.getMyTickets('user-1');
     expect(res.upcoming[0].event.posterUrl).toBeNull();
-    expect(res.upcoming[0].tickets[0].ticketImageUrl).toBeNull();
-    expect(res.upcoming[0].tickets[0].pdfUrl).toBeNull();
   });
 
   it('range chaque scope dans son groupe', async () => {

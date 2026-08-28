@@ -53,8 +53,6 @@ export class MyTicketsService {
     select: {
         id: true,
         qrStatus: true,
-        ticketImageUrl: true,
-        pdfUrl: true,
         expiresAt: true,
         cancelledAt: true,
         ticketCategory: {
@@ -111,8 +109,6 @@ export class MyTicketsService {
         id: t.id,
         categoryName: t.ticketCategory.name,
         qrStatus: t.qrStatus,
-        ticketImageUrl: t.ticketImageUrl,
-        pdfUrl: t.pdfUrl,
         ticketDesignUrl: t.ticketCategory.ticketDesignUrl,
         expiresAt: t.expiresAt,
         cancelledAt: t.cancelledAt,

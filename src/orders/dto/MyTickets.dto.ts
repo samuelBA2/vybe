@@ -5,8 +5,6 @@ export interface MyTicketDto {
   id: string;
   categoryName: string;
   qrStatus: $Enums.QRStatus;
-  ticketImageUrl: string | null; // PNG (design + QR) ; null si génération échouée
-  pdfUrl: string | null;         // PDF ; null si génération échouée
   ticketDesignUrl: string;       // design de la catégorie (fond du billet, rendu client-side)
   expiresAt: Date;
   cancelledAt: Date | null;
