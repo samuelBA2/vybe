@@ -1,9 +1,8 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException, Logger} from "@nestjs/common";
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException} from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { PrismaService } from "src/prisma/prisma.service";
 import { PLATFORM_FEE_RATE } from "src/common/constants";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
-import { TicketAssetService } from "src/ticket-asset/ticket-asset.service";
 
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -11,8 +10,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 @Injectable()
 export class OrderService {
 
-    private readonly logger = new Logger(OrderService.name);
-    constructor ( private readonly prisma: PrismaService,private readonly ticketAssets: TicketAssetService){}
+    constructor ( private readonly prisma: PrismaService){}
     async createOrder(userId: string, dto: CreateOrderDto){
         const items = dto.items;
 
@@ -82,19 +80,12 @@ export class OrderService {
             return created;
         });
 
-        // Post-commit best-effort : ne doit JAMAIS faire échouer l'achat.
-        for (const orderId of orderIds) {
-            try {
-                await this.ticketAssets.generateAssetsForOrder(orderId);
-            } catch (e) {
-                this.logger.error(`Géneration des visuels échouée (order ${orderId}) : ${(e instanceof Error ? e.stack : String(e))}`,);
-            }
-        }
-
-        // Billets du panier avec leurs URLs (renseignées si la génération a réussi).
+        // Plus de génération eager ici : le visuel (PNG/PDF) est rendu à la demande
+        // par TicketAssetService.renderTicketPng/Pdf (route /me/tickets/:id/download),
+        // le QR étant rendu client-side depuis qrToken. Il ne reste qu'à relire les tokens.
         const tickets = await this.prisma.ticket.findMany({
             where: { orderId: { in: orderIds } },
-            select: { qrToken: true, pdfUrl: true, ticketImageUrl: true },
+            select: { qrToken: true },
         });
         return { orderIds, tickets };
     }

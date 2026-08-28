@@ -1,11 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import sharp from 'sharp';
 import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
-import { CloudinaryFolder } from 'src/cloudinary/cloudinary.folder';
 
 export type TicketFields = {
     qrToken: string;
@@ -27,11 +24,6 @@ export type RenderInput = {
     designUrl: string;
 };
 
-// Billet avec sa catégorie et son événement, tel que chargé pour la génération.
-type TicketWithEvent = Prisma.TicketGetPayload<{
-    include: { ticketCategory: { include: { event: true } } };
-}>;
-
 // Échapp une valeur (saisie utilisateur) avant insertion dans le SVG pour éviter de casser le rendu.
 function escapeXml(s: string): string {
     return s.replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c] as string),);}
@@ -40,13 +32,7 @@ function escapeXml(s: string): string {
     export class TicketAssetService {
         private readonly logger = new Logger(TicketAssetService.name);
 
-        // userId dont un rattrapage est déjà en cours (anti double-régénération).
-        private readonly inFlight = new Set<string>();
-
-        constructor(
-            private readonly prisma: PrismaService,
-            private readonly cloudinary: CloudinaryService,
-        ) {}
+        constructor(private readonly prisma: PrismaService) {}
 
         private dateLabel(d: Date): string {
             const s = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
@@ -61,78 +47,6 @@ function escapeXml(s: string): string {
             const res = await fetch(url);
             if (!res.ok) throw new Error(`Impossible de récupérer le design depuis ${res.status} : ${url}`);
             return Buffer.from(await res.arrayBuffer());
-        }
-
-         // Post-commit best-effort : génère PNG+PDF de chaque billet de la commande.
-         // Ne throw jamais : un échec laisse le billet avec des URLs null (rattrapé en brique C).
-        async generateAssetsForOrder(orderId: string): Promise<void> {
-            const tickets = await this.prisma.ticket.findMany({
-                where: { orderId },
-                include: { ticketCategory: { include: { event: true } } },
-            });
-            await this.generateForTickets(tickets);
-        }
-
-        // Cœur partagé : pour chaque billet, build PNG → upload → build PDF → upload → update.
-        // Best-effort par billet (un échec n'empêche pas les autres, ne throw pas).
-        private async generateForTickets(tickets: TicketWithEvent[]): Promise<void> {
-            // Cache de PROMESSES par catégorie : un seul fetch même en parallèle.
-            const designCache = new Map<string, Promise<Buffer>>();
-            const getDesign = (categoryId: string, url: string): Promise<Buffer> => {
-                let p = designCache.get(categoryId);
-                if (!p) {
-                    p = this.fetchDesign(url);
-                    designCache.set(categoryId, p);
-                }
-                return p;
-            };
-            await Promise.allSettled(tickets.map(async (t) => {
-                try {
-                    const ev = t.ticketCategory.event;
-                    const design = await getDesign(t.ticketCategoryId, t.ticketCategory.ticketDesignUrl);
-                    const png = await this.buildTicketImage(design, {
-                        qrToken: t.qrToken,
-                        eventCategory: ev.category,
-                        eventTitle: ev.title,
-                        dateLabel: this.dateLabel(ev.startDate),
-                        timeLabel: this.timeLabel(ev.startDate),
-                        placeLabel: t.ticketCategory.name,
-                    })
-                    const imageRes = await this.cloudinary.uploadBuffer(png, CloudinaryFolder.TICKETS);
-                    const pdf = await this.buildTicketPdf(png);
-                    const pdfRes = await this.cloudinary.uploadRawBuffer(pdf, CloudinaryFolder.TICKETS, `ticket-${t.id}`);
-                    await this.prisma.ticket.update({
-                        where: { id: t.id },
-                        data: { ticketImageUrl: imageRes.secure_url, pdfUrl: pdfRes.secure_url },
-                    });
-                } catch (e){
-                    this.logger.error(`Echec génération des visuels du billet ${t.id} : ${(e instanceof Error ? e.stack : String(e))}`,)
-                }
-            }))
-        }
-
-        // Rattrapage best-effort : régénère uniquement les billets de l'utilisateur
-        // dont un visuel manque. Non-bloquant côté appelant ; ne throw jamais.
-        async regenerateMissingForUser(userId: string): Promise<void> {
-            if (this.inFlight.has(userId)) return; // déjà en vol pour cet utilisateur
-            this.inFlight.add(userId);
-            try {
-                const tickets = await this.prisma.ticket.findMany({
-                    where: {
-                        order: { userId },
-                        OR: [{ ticketImageUrl: null }, { pdfUrl: null }],
-                    },
-                    include: { ticketCategory: { include: { event: true } } },
-                });
-                if (tickets.length === 0) return;
-                await this.generateForTickets(tickets);
-            } catch (e) {
-                this.logger.error(
-                    `Rattrapage des visuels échoué (user ${userId}) : ${e instanceof Error ? e.stack : String(e)}`,
-                );
-            } finally {
-                this.inFlight.delete(userId);
-            }
         }
 
         // Rend la carte du billet (PNG, 750x1040) à partir du design (PNG) et des champs du billet.
@@ -159,7 +73,7 @@ function escapeXml(s: string): string {
             const place = escapeXml(fields.placeLabel);
 
             // Carte finale : SVG avec header + QR + ruban de catégorie + texte.
-            const svg = 
+            const svg =
             `
         <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
         <defs>
@@ -197,8 +111,8 @@ function escapeXml(s: string): string {
         <text x="392" y="990" text-anchor="middle" fill="#64748b" font-size="22">QR à usage unique</text>
         </g>
     </svg>`;
-    
-    // Resterisation 
+
+    // Resterisation
 
     return sharp(Buffer.from(svg))
         .png()

@@ -21,7 +21,6 @@ describe('OrderService', () => {
     ticket: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
-  let ticketAssets: { generateAssetsForOrder: jest.Mock };
 
   beforeEach(() => {
     tx = {
@@ -36,8 +35,7 @@ describe('OrderService', () => {
       // Un throw du callback se propage (en vrai, Prisma annulerait la transaction).
       $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
     };
-    ticketAssets = { generateAssetsForOrder: jest.fn().mockResolvedValue(undefined) };
-    service = new OrderService(prisma as unknown as PrismaService, ticketAssets as any);
+    service = new OrderService(prisma as unknown as PrismaService);
   });
 
   // Catégorie valide par défaut : PUBLISHED, deadline future, stock large.
@@ -135,9 +133,9 @@ describe('OrderService', () => {
       .mockResolvedValueOnce({ id: 'order-1' })
       .mockResolvedValueOnce({ id: 'order-2' });
     prisma.ticket.findMany.mockResolvedValue([
-      { qrToken: 'q1', pdfUrl: null, ticketImageUrl: null },
-      { qrToken: 'q2', pdfUrl: null, ticketImageUrl: null },
-      { qrToken: 'q3', pdfUrl: null, ticketImageUrl: null },
+      { qrToken: 'q1' },
+      { qrToken: 'q2' },
+      { qrToken: 'q3' },
     ]);
 
     const res = await service.createOrder('user-1', dto([
@@ -167,25 +165,5 @@ describe('OrderService', () => {
 
     expect(res.orderIds).toEqual(['order-1', 'order-2']);
     expect(res.tickets).toHaveLength(3);
-  });
-
-  it('déclenche la génération des visuels par commande, en post-commit', async () => {
-    prisma.ticketCategory.findMany.mockResolvedValue([category({ id: 'cat-1', name: 'Standard' })]);
-    tx.order.create.mockResolvedValue({ id: 'order-42' });
-    prisma.ticket.findMany.mockResolvedValue([{ qrToken: 'q', pdfUrl: null, ticketImageUrl: null }]);
-
-    await service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 2 }]));
-
-    expect(ticketAssets.generateAssetsForOrder).toHaveBeenCalledWith('order-42');
-  });
-
-  it("un échec de la génération ne fait pas échouer l'achat", async () => {
-    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
-    tx.order.create.mockResolvedValue({ id: 'order-99' });
-    prisma.ticket.findMany.mockResolvedValue([{ qrToken: 'q', pdfUrl: null, ticketImageUrl: null }]);
-    ticketAssets.generateAssetsForOrder.mockRejectedValue(new Error('génération KO'));
-
-    const res = await service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 1 }]));
-    expect(res.orderIds).toEqual(['order-99']);
   });
 });
