@@ -32,6 +32,7 @@ describe('MyTicketsService', () => {
     cancelledAt: over.cancelledAt ?? null,
     ticketCategory: {
       name: over.categoryName ?? 'VIP',
+      ticketDesignUrl: over.ticketDesignUrl ?? 'design-url',
       event: {
         id: over.eventId ?? 'ev-1',
         reference: over.reference ?? 'VYBE-AAA',
@@ -84,6 +85,7 @@ describe('MyTicketsService', () => {
       pdfUrl: 'pdf-url',
       expiresAt: expect.any(Date),
       cancelledAt: null,
+      ticketDesignUrl: 'design-url',
     });
     expect(evt.tickets[0]).not.toHaveProperty('qrToken');
   });

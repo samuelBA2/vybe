@@ -74,6 +74,7 @@ export class MyTicketsService {
         ticketCategory: {
         select: {
             name: true,
+            ticketDesignUrl: true,
             event: {
                 select: {
                 id: true,
@@ -126,6 +127,7 @@ export class MyTicketsService {
         qrStatus: t.qrStatus,
         ticketImageUrl: t.ticketImageUrl,
         pdfUrl: t.pdfUrl,
+        ticketDesignUrl: t.ticketCategory.ticketDesignUrl,
         expiresAt: t.expiresAt,
         cancelledAt: t.cancelledAt,
         });
