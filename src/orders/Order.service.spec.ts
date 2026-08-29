@@ -133,9 +133,9 @@ describe('OrderService', () => {
       .mockResolvedValueOnce({ id: 'order-1' })
       .mockResolvedValueOnce({ id: 'order-2' });
     prisma.ticket.findMany.mockResolvedValue([
-      { qrToken: 'q1' },
-      { qrToken: 'q2' },
-      { qrToken: 'q3' },
+      { id: 't1' },
+      { id: 't2' },
+      { id: 't3' },
     ]);
 
     const res = await service.createOrder('user-1', dto([

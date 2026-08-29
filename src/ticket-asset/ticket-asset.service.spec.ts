@@ -19,7 +19,7 @@ const baseFields: TicketFields = {
 };
 
 describe('TicketAssetService.buildTicketImage', () => {
-  const service = new TicketAssetService({} as any);
+  const service = new TicketAssetService();
   let qrPng: Buffer;
 
   beforeAll(async () => {
@@ -53,7 +53,7 @@ describe('TicketAssetService.buildTicketImage', () => {
 });
 
 describe('TicketAssetService.renderTicketPng — fallback fond neutre', () => {
-  const service = new TicketAssetService({} as any);
+  const service = new TicketAssetService();
   const originalFetch = global.fetch;
 
   beforeEach(async () => {
@@ -86,7 +86,7 @@ describe('TicketAssetService.renderTicketPng — fallback fond neutre', () => {
 });
 
 describe('TicketAssetService.buildTicketPdf', () => {
-  const service = new TicketAssetService({} as any);
+  const service = new TicketAssetService();
 
   it('renvoie un buffer PDF (magic %PDF)', async () => {
     const png = await sharp({ create: { width: 300, height: 300, channels: 3, background: '#000000' } }).png().toBuffer();

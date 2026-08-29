@@ -82,10 +82,12 @@ export class OrderService {
 
         // Plus de génération eager ici : le visuel (PNG/PDF) est rendu à la demande
         // par TicketAssetService.renderTicketPng/Pdf (route /me/tickets/:id/download),
-        // le QR étant rendu client-side depuis qrToken. Il ne reste qu'à relire les tokens.
+        // le QR étant rendu client-side depuis qrToken. On ne renvoie que les ids des
+        // billets créés : le qrToken brut ne sort JAMAIS que via l'endpoint gardé
+        // GET /me/tickets/:id/qr-token (jamais dans une réponse de liste/commande).
         const tickets = await this.prisma.ticket.findMany({
             where: { orderId: { in: orderIds } },
-            select: { qrToken: true },
+            select: { id: true },
         });
         return { orderIds, tickets };
     }

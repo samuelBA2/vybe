@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import sharp from 'sharp';
 import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
-import { PrismaService } from 'src/prisma/prisma.service';
 
 export type TicketFields = {
     qrToken: string;
@@ -31,8 +30,9 @@ function escapeXml(s: string): string {
     @Injectable()
     export class TicketAssetService {
         private readonly logger = new Logger(TicketAssetService.name);
-
-        constructor(private readonly prisma: PrismaService) {}
+        // Aucune dépendance injectée : le rendu à la demande ne lit rien en base
+        // (il reçoit déjà les champs du billet via RenderInput). Le design est
+        // récupéré par fetch HTTP, pas par Prisma.
 
         private dateLabel(d: Date): string {
             const s = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
