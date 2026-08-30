@@ -226,6 +226,10 @@ model Order {
   createdAt        DateTime    @default(now())
 
   tickets          Ticket[]
+
+  // Filtre réel du dashboard : paymentStatus='PAID' AND ticketCategoryId IN (...).
+  // Le composite couvre aussi les lookups par ticketCategoryId seul (préfixe).
+  @@index([ticketCategoryId, paymentStatus])
 }
 
 enum PaymentStatus {
