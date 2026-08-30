@@ -128,6 +128,11 @@ model Event {
   ticketCategories TicketCategory[]
   mediaFiles       EventMedia[]
   agents           Agent[]
+
+  // Keyset GET /events : WHERE status=PUBLISHED ORDER BY startDate.
+  @@index([status, startDate])
+  // Keyset GET /events/mine : WHERE createdById=... ORDER BY createdAt.
+  @@index([createdById, createdAt])
 }
 
 model EventMedia {
@@ -257,6 +262,8 @@ model Ticket {
 
   @@index([qrToken])   // Index pour les lookups rapides de scan
   @@index([expiresAt]) // Index pour le nettoyage automatique
+  // Dashboard : agrégats/timeline par catégorie + statut, tri par scannedAt.
+  @@index([ticketCategoryId, qrStatus, scannedAt])
 }
 
 enum QRStatus {
