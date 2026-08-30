@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { MyTicketsService } from './MyTickets.service';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { MY_TICKETS_MAX_PER_SCOPE } from 'src/common/constants';
 
 describe('MyTicketsService', () => {
   let service: MyTicketsService;
@@ -51,7 +52,19 @@ describe('MyTicketsService', () => {
 
   it('utilisateur sans billet → { upcoming: [], past: [] }', async () => {
     const res = await service.getMyTickets('user-1');
-    expect(res).toEqual({ upcoming: [], past: [] });
+    expect(res).toEqual({ upcoming: [], past: [], truncated: false });
+  });
+
+  it('plafond atteint → truncated:true, billets bornés (pas de troncature silencieuse)', async () => {
+    // Un scope renvoie MAX+1 lignes (lu en take: MAX+1) → dépassement.
+    const many = Array.from({ length: MY_TICKETS_MAX_PER_SCOPE + 1 }, (_, i) =>
+      row({ id: `t${i}`, eventId: `ev-${i}` }),
+    );
+    scopedRows(many);
+    const res = await service.getMyTickets('user-1');
+    expect(res.truncated).toBe(true);
+    // Borné à MAX événements distincts (1 billet chacun ici).
+    expect(res.upcoming).toHaveLength(MY_TICKETS_MAX_PER_SCOPE);
   });
 
   it('plusieurs billets du même événement → une entrée, tous les billets dedans', async () => {

@@ -26,7 +26,10 @@ export interface MyEventTicketsDto {
 }
 
 // Réponse de GET /me/tickets : deux groupes, à venir et passés.
+// `truncated` : true si un scope a atteint le plafond de sécurité MY_TICKETS_MAX_PER_SCOPE
+// (jamais pour un utilisateur réel) — signale une troncature au lieu de la masquer.
 export interface MyTicketsResponseDto {
   upcoming: MyEventTicketsDto[];
   past: MyEventTicketsDto[];
+  truncated: boolean;
 }

@@ -10,6 +10,7 @@ import { MailService } from 'src/mail/mail.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { randomCode } from 'src/common/generate-code';
+import { buildPage, KeysetCursor } from 'src/common/pagination';
 
 // Limite globale de l'application : nombre maximum de billets pour un événement en mode limité.
 const MAX_TOTAL_CAPACITY = 50000;
@@ -31,14 +32,27 @@ export class EventsService {
 
   // Liste publique : uniquement les événements validés par la modération,
   // triés par date de début, avec médias et catégories de billets.
-  async findPublished() {
-    return this.prisma.event.findMany({
-      where: { status: $Enums.EventStatus.PUBLISHED,
-        endDate: { gte: new Date() } //garde les événements qui ne sont pas encore terminés
+  // Pagination keyset sur (startDate ASC, id) — index Event[status, startDate].
+  // Rétro-compatible : sans limit/cursor, renvoie la 1re page bornée par défaut.
+  async findPublished(limit: number, cursor: KeysetCursor | null) {
+    const rows = await this.prisma.event.findMany({
+      where: {
+        status: $Enums.EventStatus.PUBLISHED,
+        endDate: { gte: new Date() }, // garde les événements pas encore terminés
+        ...(cursor
+          ? {
+              OR: [
+                { startDate: { gt: new Date(cursor.v) } },
+                { startDate: new Date(cursor.v), id: { gt: cursor.id } },
+              ],
+            }
+          : {}),
       },
-      orderBy: { startDate: 'asc' },
+      orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
+      take: limit + 1, // +1 pour détecter la page suivante
       include: { mediaFiles: true, ticketCategories: true },
     });
+    return buildPage(rows, limit, (e) => ({ v: e.startDate.toISOString(), id: e.id }));
   }
 
   // Met à jour l'affiche (EventMedia isPoster) après upload Cloudinary :
@@ -52,12 +66,25 @@ export class EventsService {
 
   // Événements de l'organisateur connecté, tous statuts confondus
   // (il doit voir ses événements en attente de modération).
-  async findMine(userId: string) {
-    return this.prisma.event.findMany({
-      where: { createdById: userId },
-      orderBy: { createdAt: 'desc' },
+  // Pagination keyset sur (createdAt DESC, id DESC) — index Event[createdById, createdAt].
+  async findMine(userId: string, limit: number, cursor: KeysetCursor | null) {
+    const rows = await this.prisma.event.findMany({
+      where: {
+        createdById: userId,
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.v) } },
+                { createdAt: new Date(cursor.v), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
       include: { mediaFiles: true, ticketCategories: true },
     });
+    return buildPage(rows, limit, (e) => ({ v: e.createdAt.toISOString(), id: e.id }));
   }
 
   async findOne(eventId: string) {

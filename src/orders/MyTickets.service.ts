@@ -1,12 +1,14 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { QRStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { MyEventTicketsDto, MyTicketsResponseDto } from './dto/MyTickets.dto';
+import { MY_TICKETS_MAX_PER_SCOPE } from 'src/common/constants';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class MyTicketsService {
+    private readonly logger = new Logger(MyTicketsService.name);
     constructor(private readonly prisma: PrismaService) {}
 
     // Plus de rattrapage ici : il n'y a plus de visuel stocké à régénérer,
@@ -18,16 +20,27 @@ export class MyTicketsService {
         this.getScope(userId, now, 'upcoming'),
         this.getScope(userId, now, 'past'),
     ]);
-    return { upcoming, past };
+    // Signal explicite si un scope a atteint le plafond de sécurité : jamais de
+    // troncature silencieuse. Un utilisateur réel ne déclenche jamais ceci.
+    const truncated = upcoming.truncated || past.truncated;
+    if (truncated) {
+        this.logger.warn(
+            `Plafond /me/tickets atteint (userId=${userId}, upcoming=${upcoming.truncated}, past=${past.truncated}) — passer à une pagination par événement.`,
+        );
+    }
+    return { upcoming: upcoming.events, past: past.events, truncated };
     }
 
     private async getScope(
         userId: string,
         now: Date,
         scope: 'upcoming' | 'past',
-        ): Promise<MyEventTicketsDto[]> {
+        ): Promise<{ events: MyEventTicketsDto[]; truncated: boolean }> {
     const rows = await this.fetchRows(userId, now, scope);
-    return this.groupByEvent(rows);
+    // rows a été lu en take: MAX+1 → au-delà de MAX, le plafond est dépassé.
+    const truncated = rows.length > MY_TICKETS_MAX_PER_SCOPE;
+    const bounded = truncated ? rows.slice(0, MY_TICKETS_MAX_PER_SCOPE) : rows;
+    return { events: this.groupByEvent(bounded), truncated };
     }
 
     private fetchRows(userId: string, now: Date, scope: 'upcoming' | 'past') {
@@ -50,6 +63,8 @@ export class MyTicketsService {
         { ticketCategory: { event: { startDate: isUpcoming ? 'asc' : 'desc' } } },
         { createdAt: 'asc' },
     ],
+    // Garde-fou (pas une pagination) : +1 pour détecter si le plafond est atteint.
+    take: MY_TICKETS_MAX_PER_SCOPE + 1,
     select: {
         id: true,
         qrStatus: true,
