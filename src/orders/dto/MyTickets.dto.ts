@@ -16,6 +16,7 @@ export interface MyEventTicketsDto {
     id: string;
     reference: string;
     title: string;
+    category: $Enums.EventCategory; // ex. CONCERT — affiché en tête du billet
     startDate: Date;
     endDate: Date;
     location: string;
