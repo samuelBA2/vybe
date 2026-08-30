@@ -38,6 +38,27 @@ export const ALLOWED_MIME = new Set<string>([
   'application/pdf',
 ]);
 
+// ─── Dashboard / fuseau applicatif ────────────────────────────────────────────
+// Fuseau IANA de la région de l'app (mono-région pour l'instant). Sert à
+// bucketiser la timeline des scans en HEURE LOCALE de l'événement côté SQL,
+// pour que l'organisateur ne voie pas des heures décalées (indépendamment du
+// fuseau de son navigateur). Le jour du multi-région : stocker un fuseau par
+// événement et l'utiliser à la place de cette constante.
+export const APP_TIMEZONE = process.env.APP_TIMEZONE ?? 'Africa/Kinshasa';
+
+// ─── Pagination (keyset) ──────────────────────────────────────────────────────
+// Taille de page par défaut et plafond dur des listes paginées (events, mine).
+export const DEFAULT_PAGE_SIZE = 20;
+export const MAX_PAGE_SIZE = 100;
+
+// Garde-fou /me/tickets : ce n'est PAS une pagination (les billets d'un seul
+// utilisateur sont naturellement bornés) mais un plafond de sécurité par scope
+// (upcoming/past) pour ne jamais charger un volume pathologique en mémoire.
+// Valeur volontairement hors de portée d'un utilisateur réel. Si elle est
+// atteinte, la réponse le SIGNALE (champ `truncated`) — jamais de troncature
+// silencieuse — et un warn est loggé côté serveur.
+export const MY_TICKETS_MAX_PER_SCOPE = 1000;
+
 // ─── Billetterie / commandes ──────────────────────────────────────────────────
 // Commission Vybe prélevée sur chaque commande, déduite du montant reversé à
 // l'organisateur (organizerAmount = totalAmount − platformFee).

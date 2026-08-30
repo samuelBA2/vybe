@@ -4,7 +4,7 @@ import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
-import { MAX_AGENTS_PER_EVENT, PLATFORM_FEE_RATE } from 'src/common/constants';
+import { MAX_AGENTS_PER_EVENT, PLATFORM_FEE_RATE, APP_TIMEZONE } from 'src/common/constants';
 import { ScanDashboardResponseDto } from './dto/ScanDashboard.dto';
 
 const round2 = (n: number) => Math.round(n* 100) / 100;
@@ -224,22 +224,27 @@ export class AgentService {
         };
       });
 
-    // 4. Timeline (buckets horaires, troncature en UTC pour un résultat déterministe)
-    const usedTickets = await this.prisma.ticket.findMany({
-      where: { qrStatus: 'USED', ...eventFilter },
-      select: { scannedAt: true },
-    });
-    const buckets = new Map<string, number>();
-    for (const t of usedTickets) {
-      if (!t.scannedAt) continue;
-      const d = new Date(t.scannedAt);
-      d.setUTCMinutes(0, 0, 0);
-      const key = d.toISOString();
-      buckets.set(key, (buckets.get(key) ?? 0) + 1);
-    }
-    const timeline = [...buckets.entries()]
-      .map(([hour, count]) => ({ hour, count }))
-      .sort((a, b) => a.hour.localeCompare(b.hour));
+    // 4. Timeline : bucketisation horaire AGRÉGÉE EN SQL (ne charge plus tous les
+    // billets USED en mémoire — indispensable pour la billetterie illimitée).
+    // Buckets calés sur l'HEURE LOCALE de la région (APP_TIMEZONE) : scannedAt est
+    // un timestamp UTC naïf → on le réinterprète en UTC puis on le convertit dans
+    // le fuseau applicatif avant de tronquer à l'heure. `hour` est donc une chaîne
+    // locale SANS suffixe Z (heure murale de l'événement) ; le front l'affiche telle
+    // quelle, sans reconvertir. Filtre servi par l'index Ticket[ticketCategoryId,qrStatus,scannedAt].
+    const timelineRows = await this.prisma.$queryRaw<Array<{ hour: string; count: number }>>`
+      SELECT to_char(
+               date_trunc('hour', (t."scannedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${APP_TIMEZONE}),
+               'YYYY-MM-DD"T"HH24:00:00'
+             ) AS hour,
+             COUNT(*)::int AS count
+      FROM "Ticket" t
+      JOIN "TicketCategory" tc ON tc."id" = t."ticketCategoryId"
+      WHERE tc."eventId" = ${eventId}
+        AND t."qrStatus"::text = 'USED'
+        AND t."scannedAt" IS NOT NULL
+      GROUP BY 1
+      ORDER BY 1;`;
+    const timeline = timelineRows.map((r) => ({ hour: r.hour, count: Number(r.count) }));
 
     const finances = {
       gross: round2(financeAgg._sum.totalAmount ?? 0),

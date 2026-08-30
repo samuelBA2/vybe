@@ -17,7 +17,10 @@ export interface ScanDashboardResponseDto {
         revenue: number;  // brut PAID de la catégorie (Σ totalAmount)
     }[];
     byAgent: { agentId: string, name: string, scanned: number}[];
-    timeline: { hour: string; count: number}[] // heur = ISO du début d'heure
+    // hour = début d'heure en HEURE LOCALE de l'événement (APP_TIMEZONE), format
+    // 'YYYY-MM-DDTHH:00:00' SANS suffixe Z. Le front l'affiche tel quel (pas de
+    // reconversion de fuseau) pour ne pas décaler les heures vues par l'organisateur.
+    timeline: { hour: string; count: number}[]
     finances: {
         gross: number;        // Σ totalAmount (PAID)
         platformFee: number;  // Σ platformFee (PAID) — somme des commissions prélevées à chaque achat

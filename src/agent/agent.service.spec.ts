@@ -17,6 +17,7 @@ describe('AgentService', () => {
     ticket: { findUnique: jest.Mock; updateMany: jest.Mock; groupBy: jest.Mock; findMany: jest.Mock };
     ticketCategory: { findMany: jest.Mock };
     order: { aggregate: jest.Mock; groupBy: jest.Mock };
+    $queryRaw: jest.Mock;
   };
 
   beforeEach(() => {
@@ -32,6 +33,7 @@ describe('AgentService', () => {
       ticket: { findUnique: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findMany: jest.fn() },
       ticketCategory: { findMany: jest.fn() },
       order: { aggregate: jest.fn(), groupBy: jest.fn() },
+      $queryRaw: jest.fn(),
     };
     // Défauts « vides » pour l'agrégation finances du dashboard
     prisma.order.aggregate.mockResolvedValue({
@@ -39,6 +41,8 @@ describe('AgentService', () => {
       _count: 0,
     });
     prisma.order.groupBy.mockResolvedValue([]);
+    // Timeline agrégée en SQL ($queryRaw) : défaut vide.
+    prisma.$queryRaw.mockResolvedValue([]);
     service = new AgentService(prisma as unknown as PrismaService);
   });
 
@@ -387,7 +391,7 @@ describe('AgentService', () => {
       expect(res.timeline).toEqual([]);
     });
 
-    it('timeline : deux scans même heure → un bucket count 2 ; heures différentes → deux buckets triés', async () => {
+    it('timeline : renvoie les buckets horaires locaux agrégés en SQL (count normalisé en number)', async () => {
       prisma.event.findUnique.mockResolvedValue({
         id: 'e1',
         reference: 'VYBE-8JGBLV',
@@ -400,17 +404,20 @@ describe('AgentService', () => {
         .mockResolvedValueOnce([]);
       prisma.ticketCategory.findMany.mockResolvedValue([]);
       prisma.agent.findMany.mockResolvedValue([]);
-      prisma.ticket.findMany.mockResolvedValue([
-        { scannedAt: new Date('2026-08-20T18:05:00.000Z') },
-        { scannedAt: new Date('2026-08-20T18:52:00.000Z') },
-        { scannedAt: new Date('2026-08-20T20:10:00.000Z') },
+      // La bucketisation est faite en SQL (fuseau local, sans Z) → on mocke $queryRaw.
+      // Les buckets arrivent déjà groupés/triés ; le service ne fait que normaliser
+      // le count (bigint → number) et passer les lignes.
+      prisma.$queryRaw.mockResolvedValue([
+        { hour: '2026-08-20T19:00:00', count: 2 },
+        { hour: '2026-08-20T21:00:00', count: 1 },
       ]);
 
       const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
 
+      expect(prisma.$queryRaw).toHaveBeenCalled();
       expect(res.timeline).toEqual([
-        { hour: '2026-08-20T18:00:00.000Z', count: 2 },
-        { hour: '2026-08-20T20:00:00.000Z', count: 1 },
+        { hour: '2026-08-20T19:00:00', count: 2 },
+        { hour: '2026-08-20T21:00:00', count: 1 },
       ]);
     });
 
