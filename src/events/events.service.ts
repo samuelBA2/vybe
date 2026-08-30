@@ -87,6 +87,13 @@ export class EventsService {
     return buildPage(rows, limit, (e) => ({ v: e.createdAt.toISOString(), id: e.id }));
   }
 
+  // Nombre total d'événements créés par l'utilisateur (pour le compteur du profil,
+  // indépendant de la pagination de findMine).
+  async countMine(userId: string): Promise<{ count: number }> {
+    const count = await this.prisma.event.count({ where: { createdById: userId } });
+    return { count };
+  }
+
   async findOne(eventId: string) {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },

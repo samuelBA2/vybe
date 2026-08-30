@@ -72,6 +72,13 @@ export class EventsController {
     return this.eventsService.findMine(req.user.sub, parseLimit(limit), decodeCursor(cursor));
   }
 
+  // Compteur d'événements créés (profil) — route statique AVANT ':id'.
+  @UseGuards(JwtAuthGuard)
+  @Get('mine/count')
+  async countMine(@Req() req) {
+    return this.eventsService.countMine(req.user.sub);
+  }
+
   // Lien magique du mail équipe : page de confirmation (évite la validation
   // accidentelle par préchargement du lien GET). Le bouton déclenche un POST.
   @Get('moderate')
