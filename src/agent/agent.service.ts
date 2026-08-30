@@ -7,6 +7,8 @@ import { hashCode } from 'src/common/hash-code';
 import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
 import { ScanDashboardResponseDto } from './dto/ScanDashboard.dto';
 
+const round2 = (n: number) => Math.round(n* 100) / 100;
+
 @Injectable()
 export class AgentService {
   constructor(private readonly prisma: PrismaService) {}
@@ -157,7 +159,7 @@ export class AgentService {
     // 2. Par catégorie
     const categories = await this.prisma.ticketCategory.findMany({
       where: { eventId },
-      select: { id: true, name: true, soldCount: true },
+      select: { id: true, name: true, soldCount: true, totalStock: true},
     });
     const usedByCategory = await this.prisma.ticket.groupBy({
       by: ['ticketCategoryId'],
@@ -166,9 +168,34 @@ export class AgentService {
     });
     const scannedForCat = (id: string): number =>
       usedByCategory.find((g: any) => g.ticketCategoryId === id)?._count ?? 0;
+
+    // Agrégats de revenus (commandes PAID uniquement, future-proof pour la brique B)
+    const categoryIds = categories.map((c) => c.id);
+    const paidWhere = { paymentStatus: 'PAID' as const, ticketCategoryId: { in: categoryIds } };
+
+    const financeAgg = await this.prisma.order.aggregate({
+      where: paidWhere,
+      _sum: { totalAmount: true, platformFee: true, organizerAmount: true, quantity: true },
+      _count: true,
+    });
+    const revenueByCat = await this.prisma.order.groupBy({
+      by: ['ticketCategoryId'],
+      where: paidWhere,
+      _sum: { totalAmount: true },
+    });
+    const revenueForCat = (id: string): number =>
+      round2(revenueByCat.find((g: any) => g.ticketCategoryId === id)?._sum.totalAmount ?? 0);
+
     const byCategory = categories.map((c) => {
       const catScanned = scannedForCat(c.id);
-      return { name: c.name, sold: c.soldCount, scanned: catScanned, remaining: c.soldCount - catScanned };
+      return {
+        name: c.name,
+        sold: c.soldCount,
+        scanned: catScanned,
+        remaining: c.totalStock === null ? null : c.totalStock - c.soldCount, // inventaire (null = illimité)
+        awaitingCheckIn: c.soldCount - catScanned, // vendus pas encore scannés
+        revenue: revenueForCat(c.id),
+      };
     });
 
     // Capacité totale = la jauge annoncée sur l'événement (null = billetterie illimitée).
@@ -214,12 +241,21 @@ export class AgentService {
       .map(([hour, count]) => ({ hour, count }))
       .sort((a, b) => a.hour.localeCompare(b.hour));
 
+    const finances = {
+      gross: round2(financeAgg._sum.totalAmount ?? 0),
+      platformFee: round2(financeAgg._sum.platformFee ?? 0),
+      net: round2(financeAgg._sum.organizerAmount ?? 0),
+      paidOrders: financeAgg._count,
+      soldTickets: financeAgg._sum.quantity ?? 0,
+    };
+
     return {
       event: { reference: event.reference, title: event.title },
       totals: { total, scanned, unused, cancelled, entryRate, capacity },
       byCategory,
       byAgent,
       timeline,
+      finances,
     };
   }
 

@@ -16,6 +16,7 @@ describe('AgentService', () => {
     agent: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock; update: jest.Mock; count: jest.Mock };
     ticket: { findUnique: jest.Mock; updateMany: jest.Mock; groupBy: jest.Mock; findMany: jest.Mock };
     ticketCategory: { findMany: jest.Mock };
+    order: { aggregate: jest.Mock; groupBy: jest.Mock };
   };
 
   beforeEach(() => {
@@ -30,7 +31,14 @@ describe('AgentService', () => {
       },
       ticket: { findUnique: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findMany: jest.fn() },
       ticketCategory: { findMany: jest.fn() },
+      order: { aggregate: jest.fn(), groupBy: jest.fn() },
     };
+    // Défauts « vides » pour l'agrégation finances du dashboard
+    prisma.order.aggregate.mockResolvedValue({
+      _sum: { totalAmount: null, platformFee: null, organizerAmount: null, quantity: null },
+      _count: 0,
+    });
+    prisma.order.groupBy.mockResolvedValue([]);
     service = new AgentService(prisma as unknown as PrismaService);
   });
 
@@ -326,8 +334,8 @@ describe('AgentService', () => {
         capacity: null, // Standard a totalStock null → billetterie illimitée
       });
       expect(res.byCategory).toEqual([
-        { name: 'VIP', sold: 5, scanned: 2, remaining: 3 },
-        { name: 'Standard', sold: 4, scanned: 1, remaining: 3 },
+        { name: 'VIP', sold: 5, scanned: 2, remaining: 5, awaitingCheckIn: 3, revenue: 0 },
+        { name: 'Standard', sold: 4, scanned: 1, remaining: null, awaitingCheckIn: 3, revenue: 0 },
       ]);
       expect(res.byAgent).toEqual([{ agentId: 'a1', name: 'Ada Lovelace', scanned: 3 }]);
     });
@@ -404,6 +412,31 @@ describe('AgentService', () => {
         { hour: '2026-08-20T18:00:00.000Z', count: 2 },
         { hour: '2026-08-20T20:00:00.000Z', count: 1 },
       ]);
+    });
+
+    it('finances : agrège les commandes PAID (brut → commission → net) + revenu par catégorie', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1', reference: 'VYBE-8JGBLV', title: 'Fête', createdById: 'owner', totalCapacity: 100,
+      });
+      prisma.ticket.groupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([
+        { id: 'c1', name: 'VIP', soldCount: 3, totalStock: 10 },
+      ]);
+      prisma.agent.findMany.mockResolvedValue([]);
+      prisma.ticket.findMany.mockResolvedValue([]);
+      prisma.order.aggregate.mockResolvedValue({
+        _sum: { totalAmount: 300, platformFee: 30, organizerAmount: 270, quantity: 3 },
+        _count: 2,
+      });
+      prisma.order.groupBy.mockResolvedValue([{ ticketCategoryId: 'c1', _sum: { totalAmount: 300 } }]);
+
+      const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
+
+      expect(res.finances).toEqual({
+        gross: 300, platformFee: 30, net: 270, paidOrders: 2, soldTickets: 3,
+      });
+      expect(res.finances.gross).toBe(res.finances.platformFee + res.finances.net);
+      expect(res.byCategory[0].revenue).toBe(300);
     });
   });
 });
