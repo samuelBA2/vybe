@@ -4,7 +4,7 @@ import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
-import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
+import { MAX_AGENTS_PER_EVENT, PLATFORM_FEE_RATE } from 'src/common/constants';
 import { ScanDashboardResponseDto } from './dto/ScanDashboard.dto';
 
 const round2 = (n: number) => Math.round(n* 100) / 100;
@@ -247,6 +247,7 @@ export class AgentService {
       net: round2(financeAgg._sum.organizerAmount ?? 0),
       paidOrders: financeAgg._count,
       soldTickets: financeAgg._sum.quantity ?? 0,
+      feeRate: PLATFORM_FEE_RATE, // taux fixe prélevé sur chaque achat
     };
 
     return {

@@ -20,9 +20,10 @@ export interface ScanDashboardResponseDto {
     timeline: { hour: string; count: number}[] // heur = ISO du début d'heure
     finances: {
         gross: number;        // Σ totalAmount (PAID)
-        platformFee: number;  // Σ platformFee (PAID)
+        platformFee: number;  // Σ platformFee (PAID) — somme des commissions prélevées à chaque achat
         net: number;          // Σ organizerAmount (PAID)
         paidOrders: number;   // nb commandes PAID
         soldTickets: number;  // Σ quantity (PAID)
+        feeRate: number;      // taux de commission fixe prélevé sur chaque achat (PLATFORM_FEE_RATE, ex. 0.15)
     }
 }   
