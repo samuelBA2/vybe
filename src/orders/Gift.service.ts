@@ -19,6 +19,15 @@ export class GiftService {
     if (event.createdById !== userId) {
       throw new ForbiddenException('Vous ne gérez pas cet événement.');
     }
+    // Offrir des billets suit les mêmes gardes que la vente : l'événement doit
+    // être publié et la date limite non dépassée (ferme aussi l'appel direct à
+    // l'endpoint sur un événement non validé, rejeté ou terminé).
+    if (event.status !== 'PUBLISHED') {
+      throw new ForbiddenException("Cet événement n'est pas ouvert : l'offre de billets nécessite un événement publié.");
+    }
+    if (event.purchaseDeadline < new Date()) {
+      throw new ForbiddenException('Les émissions pour cet événement sont clôturées (date limite dépassée).');
+    }
     // Éligibilité : illimité (totalCapacity null) toujours OK ; limité seulement si > 50.
     if (event.totalCapacity !== null && event.totalCapacity <= 50) {
       throw new ForbiddenException(

@@ -36,6 +36,8 @@ describe('GiftService', () => {
     id: 'ev-1',
     reference: 'VYBE-8JGBLV',
     createdById: 'owner',
+    status: 'PUBLISHED',
+    purchaseDeadline: new Date(Date.now() + 3_600_000),
     totalCapacity: null, // illimité par défaut
     endDate: new Date(Date.now() + 7_200_000),
     ...over,
@@ -54,6 +56,18 @@ describe('GiftService', () => {
   it('non-créateur → 403, pas de transaction', async () => {
     prisma.event.findUnique.mockResolvedValue(event());
     await expect(service.emitGifts('intrus', 'VYBE-8JGBLV', dto())).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('événement non PUBLISHED → 403, pas de transaction', async () => {
+    prisma.event.findUnique.mockResolvedValue(event({ status: 'PENDING_REVIEW' }));
+    await expect(service.emitGifts('owner', 'VYBE-8JGBLV', dto())).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('date limite dépassée → 403, pas de transaction', async () => {
+    prisma.event.findUnique.mockResolvedValue(event({ purchaseDeadline: new Date(Date.now() - 1000) }));
+    await expect(service.emitGifts('owner', 'VYBE-8JGBLV', dto())).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
