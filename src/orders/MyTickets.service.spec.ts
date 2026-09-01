@@ -164,6 +164,20 @@ describe('MyTicketsService', () => {
     });
   });
 
+  describe('markGiftDownloaded', () => {
+    it('pose giftDownloadedAt uniquement sur un GIFT non encore téléchargé du propriétaire', async () => {
+      prisma.ticket.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      await service.markGiftDownloaded('user-1', 'g1');
+      const args = prisma.ticket.updateMany.mock.calls[0][0];
+      expect(args.where).toEqual({
+        id: 'g1',
+        order: { userId: 'user-1', paymentStatus: 'GIFT' },
+        giftDownloadedAt: null,
+      });
+      expect(args.data.giftDownloadedAt).toBeInstanceOf(Date);
+    });
+  });
+
   describe('getMyGifts', () => {
     it('billets normaux exclus des onglets upcoming/past (filtre paymentStatus != GIFT)', async () => {
       await service.getMyTickets('user-1');

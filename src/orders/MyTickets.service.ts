@@ -193,6 +193,7 @@ export class MyTicketsService {
             where: { id: ticketId, order: { userId } },
             select: {
                 qrToken: true,
+                order: { select: { paymentStatus: true } },
                 ticketCategory: {
                     select: {
                         name: true,
@@ -204,5 +205,15 @@ export class MyTicketsService {
         });
         if (!t) throw new NotFoundException('Billet introuvable.');
         return t;
+    }
+
+    // Marque un billet OFFERT comme téléchargé (disparition définitive de l'onglet).
+    // updateMany gardé : ne touche que le billet GIFT du propriétaire encore non
+    // téléchargé → idempotent, no-op sur un billet normal ou déjà marqué.
+    async markGiftDownloaded(userId: string, ticketId: string): Promise<void> {
+        await this.prisma.ticket.updateMany({
+            where: { id: ticketId, order: { userId, paymentStatus: 'GIFT' }, giftDownloadedAt: null },
+            data: { giftDownloadedAt: new Date() },
+        });
     }
 }

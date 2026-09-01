@@ -74,6 +74,11 @@ export class MyTicketsController {
     res.setHeader('Content-Disposition', `attachment; filename="billet-${safe}.${wantsPdf ? 'pdf' : 'png'}"`);
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.setHeader('ETag', etag);
+
+    // Billet offert : premier téléchargement → disparition définitive de l'onglet offerts.
+    if (t.order.paymentStatus === 'GIFT') {
+      await this.myTicketsService.markGiftDownloaded(req.user.sub, id);
+    }
     res.end(buffer);
   }
 }
