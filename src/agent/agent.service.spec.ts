@@ -320,8 +320,8 @@ describe('AgentService', () => {
         // USED par agent
         .mockResolvedValueOnce([{ scannedByAgentId: 'a1', _count: 3 }]);
       prisma.ticketCategory.findMany.mockResolvedValue([
-        { id: 'c1', name: 'VIP', soldCount: 5, totalStock: 10 },
-        { id: 'c2', name: 'Standard', soldCount: 4, totalStock: null },
+        { id: 'c1', name: 'VIP', soldCount: 5, totalStock: 10, giftedCount: 2 },
+        { id: 'c2', name: 'Standard', soldCount: 4, totalStock: null, giftedCount: 0 },
       ]);
       prisma.agent.findMany.mockResolvedValue([{ id: 'a1', firstname: 'Ada', lastname: 'Lovelace' }]);
       prisma.ticket.findMany.mockResolvedValue([]); // timeline vide ici
@@ -338,10 +338,20 @@ describe('AgentService', () => {
         capacity: null, // Standard a totalStock null → billetterie illimitée
       });
       expect(res.byCategory).toEqual([
-        { name: 'VIP', sold: 5, scanned: 2, remaining: 5, awaitingCheckIn: 3, revenue: 0 },
-        { name: 'Standard', sold: 4, scanned: 1, remaining: null, awaitingCheckIn: 3, revenue: 0 },
+        { name: 'VIP', sold: 5, scanned: 2, remaining: 5, awaitingCheckIn: 3, revenue: 0, gifted: 2 },
+        { name: 'Standard', sold: 4, scanned: 1, remaining: null, awaitingCheckIn: 3, revenue: 0, gifted: 0 },
       ]);
       expect(res.byAgent).toEqual([{ agentId: 'a1', name: 'Ada Lovelace', scanned: 3 }]);
+      expect(res.byCategory[0]).toEqual(
+        expect.objectContaining({ name: 'VIP', gifted: 2 }),
+      );
+      expect(res.gifts).toEqual({
+        total: 2,
+        byCategory: [
+          { name: 'VIP', count: 2 },
+          { name: 'Standard', count: 0 },
+        ],
+      });
     });
 
     it('capacity reflète event.totalCapacity (stock limité)', async () => {

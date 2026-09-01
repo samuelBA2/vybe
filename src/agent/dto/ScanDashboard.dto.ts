@@ -15,6 +15,7 @@ export interface ScanDashboardResponseDto {
         remaining: number  | null  // INVENTAIRE : totalStock-soldCount, null = illimité
         awaitingCheckIn: number;  // vendus pas encore scannés : soldCount-scanned
         revenue: number;  // brut PAID de la catégorie (Σ totalAmount)
+        gifted: number;   // billets OFFERTS de la catégorie (giftedCount), inclus dans sold
     }[];
     byAgent: { agentId: string, name: string, scanned: number}[];
     // hour = début d'heure en HEURE LOCALE de l'événement (APP_TIMEZONE), format
@@ -29,4 +30,10 @@ export interface ScanDashboardResponseDto {
         soldTickets: number;  // Σ quantity (PAID)
         feeRate: number;      // taux de commission fixe prélevé sur chaque achat (PLATFORM_FEE_RATE, ex. 0.15)
     }
-}   
+    // Espace « offerts gratuitement » : comptage des billets offerts, séparé du
+    // calcul financier (les GIFT ne sont jamais des ventes PAID).
+    gifts: {
+        total: number;
+        byCategory: { name: string; count: number }[];
+    };
+}

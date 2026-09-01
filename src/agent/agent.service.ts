@@ -159,7 +159,7 @@ export class AgentService {
     // 2. Par catégorie
     const categories = await this.prisma.ticketCategory.findMany({
       where: { eventId },
-      select: { id: true, name: true, soldCount: true, totalStock: true},
+      select: { id: true, name: true, soldCount: true, totalStock: true, giftedCount: true },
     });
     const usedByCategory = await this.prisma.ticket.groupBy({
       by: ['ticketCategoryId'],
@@ -195,6 +195,7 @@ export class AgentService {
         remaining: c.totalStock === null ? null : c.totalStock - c.soldCount, // inventaire (null = illimité)
         awaitingCheckIn: c.soldCount - catScanned, // vendus pas encore scannés
         revenue: revenueForCat(c.id),
+        gifted: c.giftedCount,
       };
     });
 
@@ -255,6 +256,12 @@ export class AgentService {
       feeRate: PLATFORM_FEE_RATE, // taux fixe prélevé sur chaque achat
     };
 
+    // Bloc offerts : lecture directe de giftedCount (aucune agrégation de tickets).
+    const gifts = {
+      total: categories.reduce((acc, c) => acc + c.giftedCount, 0),
+      byCategory: categories.map((c) => ({ name: c.name, count: c.giftedCount })),
+    };
+
     return {
       event: { reference: event.reference, title: event.title },
       totals: { total, scanned, unused, cancelled, entryRate, capacity },
@@ -262,6 +269,7 @@ export class AgentService {
       byAgent,
       timeline,
       finances,
+      gifts,
     };
   }
 
