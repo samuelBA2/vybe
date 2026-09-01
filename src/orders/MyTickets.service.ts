@@ -50,7 +50,8 @@ export class MyTicketsService {
 
     return this.prisma.ticket.findMany({
     where: {
-        order: { userId },
+        // Les billets offerts ont leur propre onglet (getMyGifts) : jamais dans upcoming/past.
+        order: { userId, paymentStatus: { not: 'GIFT' } },
         OR: [
         { qrStatus: { not: QRStatus.CANCELLED } },
         { cancelledAt: { gte: cutoff } },
@@ -134,6 +135,43 @@ export class MyTicketsService {
 
     // L'ordre d'insertion de la Map reflète déjà l'orderBy SQL
     return [...byEvent.values()];
+    }
+
+    // Onglet « Tickets offerts » : billets GIFT du user, VISIBLES uniquement tant
+    // qu'ils sont UNUSED ET pas encore téléchargés (giftDownloadedAt null). Une fois
+    // téléchargés ou scannés, ils disparaissent définitivement (pas de flou, disparition totale).
+    async getMyGifts(userId: string): Promise<{ events: MyEventTicketsDto[] }> {
+        const rows = await this.prisma.ticket.findMany({
+            where: {
+                order: { userId, paymentStatus: 'GIFT' },
+                qrStatus: QRStatus.UNUSED,
+                giftDownloadedAt: null,
+            },
+            orderBy: [
+                { ticketCategory: { event: { startDate: 'asc' } } },
+                { createdAt: 'asc' },
+            ],
+            select: {
+                id: true,
+                qrStatus: true,
+                expiresAt: true,
+                cancelledAt: true,
+                ticketCategory: {
+                    select: {
+                        name: true,
+                        ticketDesignUrl: true,
+                        event: {
+                            select: {
+                                id: true, reference: true, title: true, category: true,
+                                startDate: true, endDate: true, location: true,
+                                mediaFiles: { where: { isPoster: true }, take: 1, select: { url: true } },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        return { events: this.groupByEvent(rows) };
     }
 
     // Token brut du billet, réservé à son propriétaire. Requête jointe unique

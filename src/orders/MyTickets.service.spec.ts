@@ -115,8 +115,8 @@ describe('MyTicketsService', () => {
       .map((c) => c[0])
       .find(isUpcomingArgs);
 
-    // Ne charge que les billets de cet utilisateur.
-    expect(args.where.order).toEqual({ userId: 'user-1' });
+    // Ne charge que les billets de cet utilisateur, hors billets offerts (onglet dédié).
+    expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: { not: 'GIFT' } });
     // Règle des 24h : non annulé OU annulé depuis moins de 24h.
     expect(args.where.OR[0]).toEqual({ qrStatus: { not: 'CANCELLED' } });
     const cutoff = args.where.OR[1].cancelledAt.gte.getTime();
@@ -132,7 +132,7 @@ describe('MyTicketsService', () => {
       .map((c) => c[0])
       .find((a) => !isUpcomingArgs(a));
 
-    expect(args.where.order).toEqual({ userId: 'user-1' });
+    expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: { not: 'GIFT' } });
     expect(args.where.ticketCategory.event.endDate.lt).toBeInstanceOf(Date);
     // Tri : le plus récent d'abord.
     expect(args.orderBy[0].ticketCategory.event.startDate).toBe('desc');
@@ -161,6 +161,35 @@ describe('MyTicketsService', () => {
     it('non-propriétaire → 404', async () => {
       prisma.ticket.findFirst.mockResolvedValue(null);
       await expect(service.getTicketForRender('intrus', 't1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('getMyGifts', () => {
+    it('billets normaux exclus des onglets upcoming/past (filtre paymentStatus != GIFT)', async () => {
+      await service.getMyTickets('user-1');
+      const args = prisma.ticket.findMany.mock.calls[0][0];
+      expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: { not: 'GIFT' } });
+    });
+
+    it('offerts visibles : UNUSED + giftDownloadedAt null, groupés par événement', async () => {
+      prisma.ticket.findMany.mockResolvedValueOnce([row({ id: 'g1', categoryName: 'Standard' })]);
+      const res = await service.getMyGifts('user-1');
+      const args = prisma.ticket.findMany.mock.calls[0][0];
+      expect(args.where).toEqual(
+        expect.objectContaining({
+          order: { userId: 'user-1', paymentStatus: 'GIFT' },
+          qrStatus: 'UNUSED',
+          giftDownloadedAt: null,
+        }),
+      );
+      expect(res.events).toHaveLength(1);
+      expect(res.events[0].tickets[0].id).toBe('g1');
+    });
+
+    it('aucun offert visible → { events: [] }', async () => {
+      prisma.ticket.findMany.mockResolvedValueOnce([]);
+      const res = await service.getMyGifts('user-1');
+      expect(res).toEqual({ events: [] });
     });
   });
 });

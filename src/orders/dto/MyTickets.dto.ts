@@ -33,3 +33,8 @@ export interface MyTicketsResponseDto {
   past: MyEventTicketsDto[];
   truncated: boolean;
 }
+
+// Réponse de GET /me/tickets/gifts : billets offerts encore visibles, groupés par événement.
+export interface MyGiftsResponseDto {
+  events: MyEventTicketsDto[];
+}

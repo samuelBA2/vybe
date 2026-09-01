@@ -21,6 +21,12 @@ export class MyTicketsController {
     return this.myTicketsService.getMyTickets(req.user.sub);
   }
 
+  // GET /me/tickets/gifts — billets offerts encore visibles (UNUSED + non téléchargés).
+  @Get('tickets/gifts')
+  async myGifts(@Req() req) {
+    return this.myTicketsService.getMyGifts(req.user.sub);
+  }
+
   // GET /me/tickets/:id/qr-token — token du billet (propriétaire uniquement).
   @Get('tickets/:id/qr-token')
   async qrToken(@Req() req, @Param('id') id: string) {
