@@ -64,6 +64,10 @@ export const MY_TICKETS_MAX_PER_SCOPE = 1000;
 // l'organisateur (organizerAmount = totalAmount − platformFee).
 export const PLATFORM_FEE_RATE = 0.15 // 15%
 
+// Nombre maximum de billets qu'un créateur peut OFFRIR par catégorie. Le
+// frontend applique la même limite (compteur X/10 + désactivation du bouton).
+export const MAX_GIFTS_PER_CATEGORY = 10;
+
 // ─── Photo de profil (avatar) ────────────────────────────────────────────────
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 Mo
 
