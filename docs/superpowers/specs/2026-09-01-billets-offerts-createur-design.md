@@ -61,9 +61,10 @@ Body : `{ ticketCategoryId: string, quantity: number }`.
 
 Contrôles **avant** toute transaction :
 1. Événement existe (sinon 404) et appartient au user connecté (sinon 403).
-2. Catégorie appartient bien à l'événement (sinon 404).
-3. Éligibilité forfait : limité → `totalCapacity > 50` ; illimité → OK (sinon 403).
-4. Plafond : `giftedCount + quantity ≤ 10` (sinon 400).
+2. Événement `PUBLISHED` et `purchaseDeadline` non dépassée (sinon 403) — mêmes gardes que la vente ; ferme l'endpoint direct sur un événement non validé, rejeté ou terminé.
+3. Catégorie appartient bien à l'événement (sinon 404).
+4. Éligibilité forfait : limité → `totalCapacity > 50` ; illimité → OK (sinon 403).
+5. Plafond : `giftedCount + quantity ≤ 10` (sinon 400).
 
 Transaction (`$transaction`) :
 - Réservation atomique anti-survente + compteur d'offerts, en un seul UPDATE gardé :
