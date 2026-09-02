@@ -91,6 +91,10 @@ Réponse : `{ orderId, tickets: [{ id }] }` (on ne renvoie jamais le `qrToken` b
   `giftDownloadedAt = now()` après le rendu. Conséquence : **disparition définitive et
   irréversible** dès téléchargement ou scan (USED). Perte du fichier = billet non
   re-téléchargeable (décision produit assumée).
+- **Décision produit confirmée (un seul format)** : la disparition se déclenche au *premier*
+  téléchargement, quel que soit le format demandé (`png` OU `pdf`). Le créateur obtient donc un
+  seul format par billet offert — télécharger le PNG retire l'entrée avant qu'il puisse prendre
+  le PDF (et inversement). Comportement voulu, pas un bug.
 - **Pas de flou QR** sur les offerts (contrairement aux billets achetés USED/CANCELLED) :
   ils disparaissent, ils ne s'affichent jamais grisés.
 
