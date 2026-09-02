@@ -144,6 +144,31 @@ describe('EventsService.createEvent', () => {
     expect(res.status).toBe('PENDING_REVIEW');
     expect(res.message).toContain('validation');
   });
+
+  describe('contrat carte (createdById + giftedCount)', () => {
+    // Garde : findOne n'a aucun `select` restrictif (include complet), donc
+    // createdById (scalaire Event) et giftedCount (scalaire TicketCategory)
+    // sont exposés automatiquement à la carte "créateur" du front. Ce test
+    // casse si un futur `select` venait à les omettre silencieusement.
+    it('findOne renvoie createdById et giftedCount par catégorie', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'ev-1',
+        reference: 'VYBE-AAA',
+        createdById: 'owner',
+        mediaFiles: [],
+        createdBy: { id: 'owner' },
+        ticketCategories: [{ id: 'c1', name: 'Standard', giftedCount: 3 }],
+      });
+
+      const res: any = await service.findOne('ev-1');
+
+      expect(res.createdById).toBe('owner');
+      expect(res.ticketCategories[0].giftedCount).toBe(3);
+      // Garde-fou : findOne doit inclure les catégories (pas de select restrictif).
+      const args = prisma.event.findUnique.mock.calls[0][0];
+      expect(args.include.ticketCategories).toBeTruthy();
+    });
+  });
 });
 
 describe('EventsService.createEvent — stock limité/illimité', () => {
