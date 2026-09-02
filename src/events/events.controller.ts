@@ -18,6 +18,7 @@ import { EventsService } from './events.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ModerateDto } from './dto/moderate.dto';
+import { parseLimit, decodeCursor } from 'src/common/pagination';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { CloudinaryFolder } from '../cloudinary/cloudinary.folder';
@@ -56,9 +57,10 @@ export class EventsController {
   }
 
   // Liste publique des événements publiés — consommée par le frontend.
+  // Pagination keyset optionnelle : ?limit=&cursor= (sans params → 1re page bornée).
   @Get()
-  async findPublished() {
-    return this.eventsService.findPublished();
+  async findPublished(@Query('limit') limit?: string, @Query('cursor') cursor?: string) {
+    return this.eventsService.findPublished(parseLimit(limit), decodeCursor(cursor));
   }
 
   // Événements créés par l'utilisateur connecté (onglet « Mes Événements »).
@@ -66,8 +68,15 @@ export class EventsController {
   // sinon Nest les fait capturer par le paramètre dynamique.
   @UseGuards(JwtAuthGuard)
   @Get('mine')
-  async findMine(@Req() req) {
-    return this.eventsService.findMine(req.user.sub);
+  async findMine(@Req() req, @Query('limit') limit?: string, @Query('cursor') cursor?: string) {
+    return this.eventsService.findMine(req.user.sub, parseLimit(limit), decodeCursor(cursor));
+  }
+
+  // Compteur d'événements créés (profil) — route statique AVANT ':id'.
+  @UseGuards(JwtAuthGuard)
+  @Get('mine/count')
+  async countMine(@Req() req) {
+    return this.eventsService.countMine(req.user.sub);
   }
 
   // Lien magique du mail équipe : page de confirmation (évite la validation

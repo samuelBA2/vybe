@@ -1,11 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import sharp from 'sharp';
 import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
-import { PrismaService } from 'src/prisma/prisma.service';
-import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
-import { CloudinaryFolder } from 'src/cloudinary/cloudinary.folder';
 
 export type TicketFields = {
     qrToken: string;
@@ -16,10 +12,16 @@ export type TicketFields = {
     placeLabel: string;    // ex: 'Standard'
 };
 
-// Billet avec sa catégorie et son événement, tel que chargé pour la génération.
-type TicketWithEvent = Prisma.TicketGetPayload<{
-    include: { ticketCategory: { include: { event: true } } };
-}>;
+// Entrée de rendu à la demande (route /download) : données brutes issues de la
+// requête jointe côté MyTicketsService, pas de dépendance Prisma ici.
+export type RenderInput = {
+    qrToken: string;
+    eventTitle: string;
+    eventCategory: string;
+    startDate: Date;
+    categoryName: string;
+    designUrl: string;
+};
 
 // Échapp une valeur (saisie utilisateur) avant insertion dans le SVG pour éviter de casser le rendu.
 function escapeXml(s: string): string {
@@ -28,14 +30,9 @@ function escapeXml(s: string): string {
     @Injectable()
     export class TicketAssetService {
         private readonly logger = new Logger(TicketAssetService.name);
-
-        // userId dont un rattrapage est déjà en cours (anti double-régénération).
-        private readonly inFlight = new Set<string>();
-
-        constructor(
-            private readonly prisma: PrismaService,
-            private readonly cloudinary: CloudinaryService,
-        ) {}
+        // Aucune dépendance injectée : le rendu à la demande ne lit rien en base
+        // (il reçoit déjà les champs du billet via RenderInput). Le design est
+        // récupéré par fetch HTTP, pas par Prisma.
 
         private dateLabel(d: Date): string {
             const s = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
@@ -50,78 +47,6 @@ function escapeXml(s: string): string {
             const res = await fetch(url);
             if (!res.ok) throw new Error(`Impossible de récupérer le design depuis ${res.status} : ${url}`);
             return Buffer.from(await res.arrayBuffer());
-        }
-
-         // Post-commit best-effort : génère PNG+PDF de chaque billet de la commande.
-         // Ne throw jamais : un échec laisse le billet avec des URLs null (rattrapé en brique C).
-        async generateAssetsForOrder(orderId: string): Promise<void> {
-            const tickets = await this.prisma.ticket.findMany({
-                where: { orderId },
-                include: { ticketCategory: { include: { event: true } } },
-            });
-            await this.generateForTickets(tickets);
-        }
-
-        // Cœur partagé : pour chaque billet, build PNG → upload → build PDF → upload → update.
-        // Best-effort par billet (un échec n'empêche pas les autres, ne throw pas).
-        private async generateForTickets(tickets: TicketWithEvent[]): Promise<void> {
-            // Cache de PROMESSES par catégorie : un seul fetch même en parallèle.
-            const designCache = new Map<string, Promise<Buffer>>();
-            const getDesign = (categoryId: string, url: string): Promise<Buffer> => {
-                let p = designCache.get(categoryId);
-                if (!p) {
-                    p = this.fetchDesign(url);
-                    designCache.set(categoryId, p);
-                }
-                return p;
-            };
-            await Promise.allSettled(tickets.map(async (t) => {
-                try {
-                    const ev = t.ticketCategory.event;
-                    const design = await getDesign(t.ticketCategoryId, t.ticketCategory.ticketDesignUrl);
-                    const png = await this.buildTicketImage(design, {
-                        qrToken: t.qrToken,
-                        eventCategory: ev.category,
-                        eventTitle: ev.title,
-                        dateLabel: this.dateLabel(ev.startDate),
-                        timeLabel: this.timeLabel(ev.startDate),
-                        placeLabel: t.ticketCategory.name,
-                    })
-                    const imageRes = await this.cloudinary.uploadBuffer(png, CloudinaryFolder.TICKETS);
-                    const pdf = await this.buildTicketPdf(png);
-                    const pdfRes = await this.cloudinary.uploadRawBuffer(pdf, CloudinaryFolder.TICKETS, `ticket-${t.id}`);
-                    await this.prisma.ticket.update({
-                        where: { id: t.id },
-                        data: { ticketImageUrl: imageRes.secure_url, pdfUrl: pdfRes.secure_url },
-                    });
-                } catch (e){
-                    this.logger.error(`Echec génération des visuels du billet ${t.id} : ${(e instanceof Error ? e.stack : String(e))}`,)
-                }
-            }))
-        }
-
-        // Rattrapage best-effort : régénère uniquement les billets de l'utilisateur
-        // dont un visuel manque. Non-bloquant côté appelant ; ne throw jamais.
-        async regenerateMissingForUser(userId: string): Promise<void> {
-            if (this.inFlight.has(userId)) return; // déjà en vol pour cet utilisateur
-            this.inFlight.add(userId);
-            try {
-                const tickets = await this.prisma.ticket.findMany({
-                    where: {
-                        order: { userId },
-                        OR: [{ ticketImageUrl: null }, { pdfUrl: null }],
-                    },
-                    include: { ticketCategory: { include: { event: true } } },
-                });
-                if (tickets.length === 0) return;
-                await this.generateForTickets(tickets);
-            } catch (e) {
-                this.logger.error(
-                    `Rattrapage des visuels échoué (user ${userId}) : ${e instanceof Error ? e.stack : String(e)}`,
-                );
-            } finally {
-                this.inFlight.delete(userId);
-            }
         }
 
         // Rend la carte du billet (PNG, 750x1040) à partir du design (PNG) et des champs du billet.
@@ -148,7 +73,7 @@ function escapeXml(s: string): string {
             const place = escapeXml(fields.placeLabel);
 
             // Carte finale : SVG avec header + QR + ruban de catégorie + texte.
-            const svg = 
+            const svg =
             `
         <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
         <defs>
@@ -186,8 +111,8 @@ function escapeXml(s: string): string {
         <text x="392" y="990" text-anchor="middle" fill="#64748b" font-size="22">QR à usage unique</text>
         </g>
     </svg>`;
-    
-    // Resterisation 
+
+    // Resterisation
 
     return sharp(Buffer.from(svg))
         .png()
@@ -197,11 +122,11 @@ function escapeXml(s: string): string {
 
         async buildTicketPdf(ticketPng: Buffer): Promise<Buffer> {
             const meta = await sharp(ticketPng).metadata();
-            const w = meta.width ?? 0; // valeur finale non connue avant le rendu 
+            const w = meta.width ?? 0; // valeur finale non connue avant le rendu
             const h = meta.height ?? 0;
             return new Promise<Buffer>((resolve, reject) => {
                 const doc = new PDFDocument({ size: [w, h], margin: 0 });
-                const chunks: Buffer[] = []; 
+                const chunks: Buffer[] = [];
 
                 doc.on('data', (chunk) => chunks.push(chunk));
                 doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -209,6 +134,44 @@ function escapeXml(s: string): string {
                 doc.image(ticketPng, 0, 0, { width: w, height: h });
                 doc.end();
             })
+        }
+
+        // Fond neutre brandé si le design est injoignable (P4) : mieux vaut un billet
+        // livrable avec un bandeau uni qu'une 500 côté utilisateur qui veut son entrée.
+        private async neutralBackground(width: number, height: number): Promise<Buffer> {
+            return sharp({ create: { width, height, channels: 3, background: '#0b0b12' } }).png().toBuffer();
+        }
+
+        // Le rendu à la demande est synchrone avec la requête HTTP (pas de best-effort
+        // en tâche de fond ici) : un design injoignable ne doit jamais faire échouer
+        // le téléchargement, donc on retombe sur le fond neutre plutôt que de propager.
+        private async fetchDesignOrFallback(url: string): Promise<Buffer> {
+            try {
+                return await this.fetchDesign(url);
+            } catch (e) {
+                this.logger.warn(`Design injoignable, fond neutre utilisé : ${e instanceof Error ? e.message : String(e)}`);
+                return this.neutralBackground(750, 300); // dimensions de l'en-tête cover
+            }
+        }
+
+        // Compose le PNG du billet à la demande (design + QR), sans upload ni stockage :
+        // le fichier n'existe que le temps de la réponse HTTP (voir route /download).
+        async renderTicketPng(input: RenderInput): Promise<Buffer> {
+            const fields: TicketFields = {
+                qrToken: input.qrToken,
+                eventCategory: input.eventCategory,
+                eventTitle: input.eventTitle,
+                dateLabel: this.dateLabel(input.startDate),
+                timeLabel: this.timeLabel(input.startDate),
+                placeLabel: input.categoryName,
+            };
+            const design = await this.fetchDesignOrFallback(input.designUrl);
+            return this.buildTicketImage(design, fields);
+        }
+
+        // Même logique que renderTicketPng, encapsulée en PDF via buildTicketPdf.
+        async renderTicketPdf(input: RenderInput): Promise<Buffer> {
+            return this.buildTicketPdf(await this.renderTicketPng(input));
         }
 
     }

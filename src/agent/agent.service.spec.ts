@@ -16,6 +16,8 @@ describe('AgentService', () => {
     agent: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock; update: jest.Mock; count: jest.Mock };
     ticket: { findUnique: jest.Mock; updateMany: jest.Mock; groupBy: jest.Mock; findMany: jest.Mock };
     ticketCategory: { findMany: jest.Mock };
+    order: { aggregate: jest.Mock; groupBy: jest.Mock };
+    $queryRaw: jest.Mock;
   };
 
   beforeEach(() => {
@@ -30,7 +32,17 @@ describe('AgentService', () => {
       },
       ticket: { findUnique: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findMany: jest.fn() },
       ticketCategory: { findMany: jest.fn() },
+      order: { aggregate: jest.fn(), groupBy: jest.fn() },
+      $queryRaw: jest.fn(),
     };
+    // Défauts « vides » pour l'agrégation finances du dashboard
+    prisma.order.aggregate.mockResolvedValue({
+      _sum: { totalAmount: null, platformFee: null, organizerAmount: null, quantity: null },
+      _count: 0,
+    });
+    prisma.order.groupBy.mockResolvedValue([]);
+    // Timeline agrégée en SQL ($queryRaw) : défaut vide.
+    prisma.$queryRaw.mockResolvedValue([]);
     service = new AgentService(prisma as unknown as PrismaService);
   });
 
@@ -213,12 +225,15 @@ describe('AgentService', () => {
       expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
     });
 
-    it('billet déjà scanné (USED) → 409', async () => {
+    it('billet déjà scanné (USED) → 409 avec scannedAt (ISO) structuré', async () => {
       prisma.agent.findUnique.mockResolvedValue(activeAgent);
       prisma.ticket.findUnique.mockResolvedValue(
         ticket({ qrStatus: 'USED', scannedAt: new Date('2026-08-11T10:00:00.000Z') }),
       );
-      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ConflictException);
+      // La réponse porte le message + la date brute (ISO) pour un formatage local côté client.
+      await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toMatchObject({
+        response: { message: 'Billet déjà scanné.', scannedAt: '2026-08-11T10:00:00.000Z' },
+      });
       expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
     });
 
@@ -288,6 +303,7 @@ describe('AgentService', () => {
         reference: 'VYBE-8JGBLV',
         title: 'Fête',
         createdById: 'owner',
+        totalCapacity: null,
       });
       prisma.ticket.groupBy
         // statuts globaux
@@ -304,8 +320,8 @@ describe('AgentService', () => {
         // USED par agent
         .mockResolvedValueOnce([{ scannedByAgentId: 'a1', _count: 3 }]);
       prisma.ticketCategory.findMany.mockResolvedValue([
-        { id: 'c1', name: 'VIP', soldCount: 5, totalStock: 10 },
-        { id: 'c2', name: 'Standard', soldCount: 4, totalStock: null },
+        { id: 'c1', name: 'VIP', soldCount: 5, totalStock: 10, giftedCount: 2 },
+        { id: 'c2', name: 'Standard', soldCount: 4, totalStock: null, giftedCount: 0 },
       ]);
       prisma.agent.findMany.mockResolvedValue([{ id: 'a1', firstname: 'Ada', lastname: 'Lovelace' }]);
       prisma.ticket.findMany.mockResolvedValue([]); // timeline vide ici
@@ -319,12 +335,46 @@ describe('AgentService', () => {
         unused: 1,
         cancelled: 2,
         entryRate: 0.75, // 3 / (3 + 1)
+        capacity: null, // Standard a totalStock null → billetterie illimitée
       });
       expect(res.byCategory).toEqual([
-        { name: 'VIP', sold: 5, scanned: 2, remaining: 3 },
-        { name: 'Standard', sold: 4, scanned: 1, remaining: 3 },
+        { name: 'VIP', sold: 5, scanned: 2, remaining: 5, awaitingCheckIn: 3, revenue: 0, gifted: 2 },
+        { name: 'Standard', sold: 4, scanned: 1, remaining: null, awaitingCheckIn: 3, revenue: 0, gifted: 0 },
       ]);
       expect(res.byAgent).toEqual([{ agentId: 'a1', name: 'Ada Lovelace', scanned: 3 }]);
+      expect(res.byCategory[0]).toEqual(
+        expect.objectContaining({ name: 'VIP', gifted: 2 }),
+      );
+      expect(res.gifts).toEqual({
+        total: 2,
+        byCategory: [
+          { name: 'VIP', count: 2 },
+          { name: 'Standard', count: 0 },
+        ],
+      });
+    });
+
+    it('capacity reflète event.totalCapacity (stock limité)', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1',
+        reference: 'VYBE-8JGBLV',
+        title: 'Fête',
+        createdById: 'owner',
+        totalCapacity: 500,
+      });
+      prisma.ticket.groupBy
+        .mockResolvedValueOnce([{ qrStatus: 'UNUSED', _count: 4 }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([
+        { id: 'c1', name: 'VIP', soldCount: 4 },
+      ]);
+      prisma.agent.findMany.mockResolvedValue([]);
+      prisma.ticket.findMany.mockResolvedValue([]);
+
+      const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
+
+      expect(res.totals.capacity).toBe(500);
     });
 
     it('cas vide (0 scan) → tableaux vides, entryRate 0 sans division par zéro', async () => {
@@ -333,6 +383,7 @@ describe('AgentService', () => {
         reference: 'VYBE-8JGBLV',
         title: 'Fête',
         createdById: 'owner',
+        totalCapacity: null,
       });
       prisma.ticket.groupBy
         .mockResolvedValueOnce([])
@@ -344,13 +395,13 @@ describe('AgentService', () => {
 
       const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
 
-      expect(res.totals).toEqual({ total: 0, scanned: 0, unused: 0, cancelled: 0, entryRate: 0 });
+      expect(res.totals).toEqual({ total: 0, scanned: 0, unused: 0, cancelled: 0, entryRate: 0, capacity: null });
       expect(res.byCategory).toEqual([]);
       expect(res.byAgent).toEqual([]);
       expect(res.timeline).toEqual([]);
     });
 
-    it('timeline : deux scans même heure → un bucket count 2 ; heures différentes → deux buckets triés', async () => {
+    it('timeline : renvoie les buckets horaires locaux agrégés en SQL (count normalisé en number)', async () => {
       prisma.event.findUnique.mockResolvedValue({
         id: 'e1',
         reference: 'VYBE-8JGBLV',
@@ -363,18 +414,46 @@ describe('AgentService', () => {
         .mockResolvedValueOnce([]);
       prisma.ticketCategory.findMany.mockResolvedValue([]);
       prisma.agent.findMany.mockResolvedValue([]);
-      prisma.ticket.findMany.mockResolvedValue([
-        { scannedAt: new Date('2026-08-20T18:05:00.000Z') },
-        { scannedAt: new Date('2026-08-20T18:52:00.000Z') },
-        { scannedAt: new Date('2026-08-20T20:10:00.000Z') },
+      // La bucketisation est faite en SQL (fuseau local, sans Z) → on mocke $queryRaw.
+      // Les buckets arrivent déjà groupés/triés ; le service ne fait que normaliser
+      // le count (bigint → number) et passer les lignes.
+      prisma.$queryRaw.mockResolvedValue([
+        { hour: '2026-08-20T19:00:00', count: 2 },
+        { hour: '2026-08-20T21:00:00', count: 1 },
       ]);
 
       const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
 
+      expect(prisma.$queryRaw).toHaveBeenCalled();
       expect(res.timeline).toEqual([
-        { hour: '2026-08-20T18:00:00.000Z', count: 2 },
-        { hour: '2026-08-20T20:00:00.000Z', count: 1 },
+        { hour: '2026-08-20T19:00:00', count: 2 },
+        { hour: '2026-08-20T21:00:00', count: 1 },
       ]);
+    });
+
+    it('finances : agrège les commandes PAID (brut → commission → net) + revenu par catégorie', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'e1', reference: 'VYBE-8JGBLV', title: 'Fête', createdById: 'owner', totalCapacity: 100,
+      });
+      prisma.ticket.groupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([
+        { id: 'c1', name: 'VIP', soldCount: 3, totalStock: 10 },
+      ]);
+      prisma.agent.findMany.mockResolvedValue([]);
+      prisma.ticket.findMany.mockResolvedValue([]);
+      prisma.order.aggregate.mockResolvedValue({
+        _sum: { totalAmount: 300, platformFee: 30, organizerAmount: 270, quantity: 3 },
+        _count: 2,
+      });
+      prisma.order.groupBy.mockResolvedValue([{ ticketCategoryId: 'c1', _sum: { totalAmount: 300 } }]);
+
+      const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
+
+      expect(res.finances).toEqual({
+        gross: 300, platformFee: 30, net: 270, paidOrders: 2, soldTickets: 3, feeRate: 0.15,
+      });
+      expect(res.finances.gross).toBe(res.finances.platformFee + res.finances.net);
+      expect(res.byCategory[0].revenue).toBe(300);
     });
   });
 });

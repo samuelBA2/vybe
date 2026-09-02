@@ -128,6 +128,11 @@ model Event {
   ticketCategories TicketCategory[]
   mediaFiles       EventMedia[]
   agents           Agent[]
+
+  // Keyset GET /events : WHERE status=PUBLISHED ORDER BY startDate.
+  @@index([status, startDate])
+  // Keyset GET /events/mine : WHERE createdById=... ORDER BY createdAt.
+  @@index([createdById, createdAt])
 }
 
 model EventMedia {
@@ -202,6 +207,7 @@ model TicketCategory {
   totalStock   Int?    // null = stock illimité
   ticketDesignUrl String // URL de l'image de design du billet
   soldCount    Int     @default(0) //
+  giftedCount  Int     @default(0) // compteur des billets offerts émis (≤ 10) ; alimente le compteur X/10 de la carte et le bloc gifts du dashboard
   maxPerOrder  Int     @default(10) // Max billets par commande
   benefits     String?
   
@@ -226,6 +232,10 @@ model Order {
   createdAt        DateTime    @default(now())
 
   tickets          Ticket[]
+
+  // Filtre réel du dashboard : paymentStatus='PAID' AND ticketCategoryId IN (...).
+  // Le composite couvre aussi les lookups par ticketCategoryId seul (préfixe).
+  @@index([ticketCategoryId, paymentStatus])
 }
 
 enum PaymentStatus {
@@ -233,6 +243,7 @@ enum PaymentStatus {
   PAID
   FAILED
   REFUNDED
+  GIFT // billet offert par le créateur : montants 0, exclu du calcul financier (≠ PAID)
 }
 
 // Billet individuel (1 billet = 1 QR code)
@@ -247,14 +258,15 @@ model Ticket {
   scannedAt        DateTime?
   scannedByAgentId String?
   cancelledAt      DateTime?  // posé au passage en CANCELLED (brique d'annulation future) ; lu par GET /me/tickets pour la règle des 24h
+  giftDownloadedAt DateTime? // billets offerts : horodaté au 1er téléchargement → disparition définitive de l'onglet offerts
 
   expiresAt        DateTime
-  pdfUrl           String?
-  ticketImageUrl   String?   // URL Cloudinary du PNG composé (design + QR + ruban de catégorie)
   createdAt        DateTime  @default(now())
 
   @@index([qrToken])   // Index pour les lookups rapides de scan
   @@index([expiresAt]) // Index pour le nettoyage automatique
+  // Dashboard : agrégats/timeline par catégorie + statut, tri par scannedAt.
+  @@index([ticketCategoryId, qrStatus, scannedAt])
 }
 
 enum QRStatus {

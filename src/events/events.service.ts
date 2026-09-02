@@ -10,9 +10,15 @@ import { MailService } from 'src/mail/mail.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { randomCode } from 'src/common/generate-code';
+import { buildPage, KeysetCursor } from 'src/common/pagination';
 
 // Limite globale de l'application : nombre maximum de billets pour un événement en mode limité.
 const MAX_TOTAL_CAPACITY = 50000;
+
+// Plafond des catégories spéciales (toute catégorie hors la 1re/base). Ces billets
+// correspondent à des ressources physiques limitées (carré VIP, tables…) : on borne
+// dur pour éviter une survente premium, même quand la billetterie globale est illimitée.
+const MAX_SPECIAL_STOCK = 150;
 
 @Injectable()
 export class EventsService {
@@ -26,14 +32,27 @@ export class EventsService {
 
   // Liste publique : uniquement les événements validés par la modération,
   // triés par date de début, avec médias et catégories de billets.
-  async findPublished() {
-    return this.prisma.event.findMany({
-      where: { status: $Enums.EventStatus.PUBLISHED,
-        endDate: { gte: new Date() } //garde les événements qui ne sont pas encore terminés
+  // Pagination keyset sur (startDate ASC, id) — index Event[status, startDate].
+  // Rétro-compatible : sans limit/cursor, renvoie la 1re page bornée par défaut.
+  async findPublished(limit: number, cursor: KeysetCursor | null) {
+    const rows = await this.prisma.event.findMany({
+      where: {
+        status: $Enums.EventStatus.PUBLISHED,
+        endDate: { gte: new Date() }, // garde les événements pas encore terminés
+        ...(cursor
+          ? {
+              OR: [
+                { startDate: { gt: new Date(cursor.v) } },
+                { startDate: new Date(cursor.v), id: { gt: cursor.id } },
+              ],
+            }
+          : {}),
       },
-      orderBy: { startDate: 'asc' },
+      orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
+      take: limit + 1, // +1 pour détecter la page suivante
       include: { mediaFiles: true, ticketCategories: true },
     });
+    return buildPage(rows, limit, (e) => ({ v: e.startDate.toISOString(), id: e.id }));
   }
 
   // Met à jour l'affiche (EventMedia isPoster) après upload Cloudinary :
@@ -47,12 +66,32 @@ export class EventsService {
 
   // Événements de l'organisateur connecté, tous statuts confondus
   // (il doit voir ses événements en attente de modération).
-  async findMine(userId: string) {
-    return this.prisma.event.findMany({
-      where: { createdById: userId },
-      orderBy: { createdAt: 'desc' },
+  // Pagination keyset sur (createdAt DESC, id DESC) — index Event[createdById, createdAt].
+  async findMine(userId: string, limit: number, cursor: KeysetCursor | null) {
+    const rows = await this.prisma.event.findMany({
+      where: {
+        createdById: userId,
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.v) } },
+                { createdAt: new Date(cursor.v), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
       include: { mediaFiles: true, ticketCategories: true },
     });
+    return buildPage(rows, limit, (e) => ({ v: e.createdAt.toISOString(), id: e.id }));
+  }
+
+  // Nombre total d'événements créés par l'utilisateur (pour le compteur du profil,
+  // indépendant de la pagination de findMine).
+  async countMine(userId: string): Promise<{ count: number }> {
+    const count = await this.prisma.event.count({ where: { createdById: userId } });
+    return { count };
   }
 
   async findOne(eventId: string) {
@@ -105,40 +144,59 @@ export class EventsService {
       throw new BadRequestException('Vous devez définir entre 1 et 4 catégories de billets.',);
     }
 
-    // ── Stock : billetterie illimitée (case cochée) ou limitée (par défaut) ──
+    // ── Stock : base (1re catégorie) vs catégories spéciales ──────────────
+    // Règle : seule la base (index 0) peut être illimitée. Toute catégorie
+    // spéciale (index ≥ 1) doit déclarer un plafond fini ≤ MAX_SPECIAL_STOCK,
+    // dans les deux modes (illimité comme limité).
+    const cats = dto.ticketCategories;
+
+    for (let i = 1; i < cats.length; i++) {
+      const t = cats[i];
+      if (t.totalStock == null) {
+        throw new BadRequestException(
+          `La catégorie spéciale « ${t.name} » doit indiquer un nombre de billets (max ${MAX_SPECIAL_STOCK}).`,
+        );
+      }
+      if (t.totalStock < 1 || t.totalStock > MAX_SPECIAL_STOCK) {
+        throw new BadRequestException(
+          `La catégorie « ${t.name} » est limitée à ${MAX_SPECIAL_STOCK} billets.`,
+        );
+      }
+    }
+
     // eventCapacity = capacité totale de l'événement : null en illimité, sinon le nombre choisi.
     let eventCapacity: number | null = null;
-    // Seul unlimitedStock === true = illimité. Absent ou false = limité → on valide la jauge.
     if (dto.unlimitedStock !== true) {
-      // 1) En mode limité, la capacité totale est obligatoire.
+      // Mode limité : capacité totale obligatoire et bornée.
       if (dto.totalCapacity == null) {
         throw new BadRequestException(
           'En stock limité, vous devez indiquer le nombre total de billets.',
         );
       }
-      // 2) La capacité doit rester dans les bornes de l'application (1 à 50 000).
       if (dto.totalCapacity < 1 || dto.totalCapacity > MAX_TOTAL_CAPACITY) {
         throw new BadRequestException(
           `Le nombre total de billets doit être compris entre 1 et ${MAX_TOTAL_CAPACITY}.`,
         );
       }
-      // 3) Chaque catégorie doit déclarer son allocation, et on cumule pour comparer à la jauge.
-      let sum = 0;
-      for (const t of dto.ticketCategories) {
-        if (t.totalStock == null) {
-          throw new BadRequestException(
-            `En stock limité, la catégorie « ${t.name} » doit indiquer son nombre de billets.`,
-          );
-        }
-        sum += t.totalStock;
+      // Base : plafond obligatoire, borné à MAX_TOTAL_CAPACITY.
+      const base = cats[0];
+      if (base.totalStock == null) {
+        throw new BadRequestException(
+          `En stock limité, la catégorie « ${base.name} » doit indiquer son nombre de billets.`,
+        );
       }
-      // 4) La somme des catégories ne peut pas dépasser la capacité totale annoncée.
+      if (base.totalStock < 1 || base.totalStock > MAX_TOTAL_CAPACITY) {
+        throw new BadRequestException(
+          `La catégorie « ${base.name} » est limitée à ${MAX_TOTAL_CAPACITY} billets.`,
+        );
+      }
+      // Somme des allocations ≤ capacité annoncée.
+      const sum = cats.reduce((acc, t) => acc + (t.totalStock ?? 0), 0);
       if (sum > dto.totalCapacity) {
         throw new BadRequestException(
           'Vous avez dépassé le nombre des billets que vous avez commandé, si vous voulez un nombre plus élevé veuillez souscrire pour les billets en illimité.',
         );
       }
-      // Tout est valide : on retient la capacité à persister sur l'événement.
       eventCapacity = dto.totalCapacity;
     }
      // ── Référence publique unique (ex. "VYBE-XXXXX")
@@ -174,12 +232,13 @@ export class EventsService {
           })),
         },
         ticketCategories: {
-          create: dto.ticketCategories.map((t) => ({
+          create: dto.ticketCategories.map((t, i) => ({
             name: t.name,
             price: t.price,
             ticketDesignUrl: t.ticketDesignUrl,
-            // Illimité → null ; limité → l'allocation de la catégorie (déjà validée ci-dessus)
-            totalStock: dto.unlimitedStock === true ? null : (t.totalStock ?? null),
+            // Base (index 0) illimitée → null quand unlimitedStock ; sinon l'allocation validée.
+            // Spéciales (index ≥ 1) : toujours leur plafond fini.
+            totalStock: i === 0 && dto.unlimitedStock === true ? null : (t.totalStock ?? null),
             maxPerOrder: t.maxPerOrder ?? 10,
             benefits: t.benefits ?? null,
           })),
@@ -229,12 +288,11 @@ export class EventsService {
           creatorLabel: event.createdBy?.email ?? userId,
           posterUrl: poster?.url ?? null,
           totalCapacity: eventCapacity,
-          ticketCategories: dto.ticketCategories.map((t) => ({
+          ticketCategories: dto.ticketCategories.map((t, i) => ({
             name: t.name,
             price: t.price,
             ticketDesignUrl: t.ticketDesignUrl,
-            totalStock:
-              dto.unlimitedStock === true ? null : (t.totalStock ?? null),
+            totalStock: i === 0 && dto.unlimitedStock === true ? null : (t.totalStock ?? null),
           })),
           approveUrl,
           rejectUrl,

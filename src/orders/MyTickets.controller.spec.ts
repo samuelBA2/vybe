@@ -1,17 +1,22 @@
 import { Test } from '@nestjs/testing';
 import { MyTicketsController } from './MyTickets.controller';
 import { MyTicketsService } from './MyTickets.service';
+import { TicketAssetService } from 'src/ticket-asset/ticket-asset.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 
 describe('MyTicketsController', () => {
   let controller: MyTicketsController;
   const svc = { getMyTickets: jest.fn().mockResolvedValue({ upcoming: [], past: [] }) };
+  const ticketAssets = { renderTicketPng: jest.fn(), renderTicketPdf: jest.fn() };
 
   beforeEach(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [MyTicketsController],
-      providers: [{ provide: MyTicketsService, useValue: svc }],
+      providers: [
+        { provide: MyTicketsService, useValue: svc },
+        { provide: TicketAssetService, useValue: ticketAssets },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })

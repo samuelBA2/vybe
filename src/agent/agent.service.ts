@@ -4,8 +4,10 @@ import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
-import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
+import { MAX_AGENTS_PER_EVENT, PLATFORM_FEE_RATE, APP_TIMEZONE } from 'src/common/constants';
 import { ScanDashboardResponseDto } from './dto/ScanDashboard.dto';
+
+const round2 = (n: number) => Math.round(n* 100) / 100;
 
 @Injectable()
 export class AgentService {
@@ -104,7 +106,8 @@ export class AgentService {
     if (ticket.expiresAt < new Date()) throw new ForbiddenException('Billet expiré')
 
     if (ticket.qrStatus === 'CANCELLED') throw new ForbiddenException('Billet déjà annulé.')
-    if (ticket.qrStatus === 'USED') throw new ConflictException (`Billet déjà scanné le ${ticket.scannedAt?.toISOString()}.`)
+    // Date exposée en champ structuré (ISO) : le client la formate en heure locale.
+    if (ticket.qrStatus === 'USED') throw new ConflictException({ message: 'Billet déjà scanné.', scannedAt: ticket.scannedAt?.toISOString() })
 
     const res = await this.prisma.ticket.updateMany({
       where: { qrToken, qrStatus: 'UNUSED' },
@@ -156,7 +159,7 @@ export class AgentService {
     // 2. Par catégorie
     const categories = await this.prisma.ticketCategory.findMany({
       where: { eventId },
-      select: { id: true, name: true, soldCount: true, totalStock: true },
+      select: { id: true, name: true, soldCount: true, totalStock: true, giftedCount: true },
     });
     const usedByCategory = await this.prisma.ticket.groupBy({
       by: ['ticketCategoryId'],
@@ -165,10 +168,39 @@ export class AgentService {
     });
     const scannedForCat = (id: string): number =>
       usedByCategory.find((g: any) => g.ticketCategoryId === id)?._count ?? 0;
+
+    // Agrégats de revenus (commandes PAID uniquement, future-proof pour la brique B)
+    const categoryIds = categories.map((c) => c.id);
+    const paidWhere = { paymentStatus: 'PAID' as const, ticketCategoryId: { in: categoryIds } };
+
+    const financeAgg = await this.prisma.order.aggregate({
+      where: paidWhere,
+      _sum: { totalAmount: true, platformFee: true, organizerAmount: true, quantity: true },
+      _count: true,
+    });
+    const revenueByCat = await this.prisma.order.groupBy({
+      by: ['ticketCategoryId'],
+      where: paidWhere,
+      _sum: { totalAmount: true },
+    });
+    const revenueForCat = (id: string): number =>
+      round2(revenueByCat.find((g: any) => g.ticketCategoryId === id)?._sum.totalAmount ?? 0);
+
     const byCategory = categories.map((c) => {
       const catScanned = scannedForCat(c.id);
-      return { name: c.name, sold: c.soldCount, scanned: catScanned, remaining: c.soldCount - catScanned };
+      return {
+        name: c.name,
+        sold: c.soldCount,
+        scanned: catScanned,
+        remaining: c.totalStock === null ? null : c.totalStock - c.soldCount, // inventaire (null = illimité)
+        awaitingCheckIn: c.soldCount - catScanned, // vendus pas encore scannés
+        revenue: revenueForCat(c.id),
+        gifted: c.giftedCount,
+      };
     });
+
+    // Capacité totale = la jauge annoncée sur l'événement (null = billetterie illimitée).
+    const capacity = event.totalCapacity;
 
     // 3. Par agent
     const usedByAgent = await this.prisma.ticket.groupBy({
@@ -193,29 +225,51 @@ export class AgentService {
         };
       });
 
-    // 4. Timeline (buckets horaires, troncature en UTC pour un résultat déterministe)
-    const usedTickets = await this.prisma.ticket.findMany({
-      where: { qrStatus: 'USED', ...eventFilter },
-      select: { scannedAt: true },
-    });
-    const buckets = new Map<string, number>();
-    for (const t of usedTickets) {
-      if (!t.scannedAt) continue;
-      const d = new Date(t.scannedAt);
-      d.setUTCMinutes(0, 0, 0);
-      const key = d.toISOString();
-      buckets.set(key, (buckets.get(key) ?? 0) + 1);
-    }
-    const timeline = [...buckets.entries()]
-      .map(([hour, count]) => ({ hour, count }))
-      .sort((a, b) => a.hour.localeCompare(b.hour));
+    // 4. Timeline : bucketisation horaire AGRÉGÉE EN SQL (ne charge plus tous les
+    // billets USED en mémoire — indispensable pour la billetterie illimitée).
+    // Buckets calés sur l'HEURE LOCALE de la région (APP_TIMEZONE) : scannedAt est
+    // un timestamp UTC naïf → on le réinterprète en UTC puis on le convertit dans
+    // le fuseau applicatif avant de tronquer à l'heure. `hour` est donc une chaîne
+    // locale SANS suffixe Z (heure murale de l'événement) ; le front l'affiche telle
+    // quelle, sans reconvertir. Filtre servi par l'index Ticket[ticketCategoryId,qrStatus,scannedAt].
+    const timelineRows = await this.prisma.$queryRaw<Array<{ hour: string; count: number }>>`
+      SELECT to_char(
+               date_trunc('hour', (t."scannedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${APP_TIMEZONE}),
+               'YYYY-MM-DD"T"HH24:00:00'
+             ) AS hour,
+             COUNT(*)::int AS count
+      FROM "Ticket" t
+      JOIN "TicketCategory" tc ON tc."id" = t."ticketCategoryId"
+      WHERE tc."eventId" = ${eventId}
+        AND t."qrStatus"::text = 'USED'
+        AND t."scannedAt" IS NOT NULL
+      GROUP BY 1
+      ORDER BY 1;`;
+    const timeline = timelineRows.map((r) => ({ hour: r.hour, count: Number(r.count) }));
+
+    const finances = {
+      gross: round2(financeAgg._sum.totalAmount ?? 0),
+      platformFee: round2(financeAgg._sum.platformFee ?? 0),
+      net: round2(financeAgg._sum.organizerAmount ?? 0),
+      paidOrders: financeAgg._count,
+      soldTickets: financeAgg._sum.quantity ?? 0,
+      feeRate: PLATFORM_FEE_RATE, // taux fixe prélevé sur chaque achat
+    };
+
+    // Bloc offerts : lecture directe de giftedCount (aucune agrégation de tickets).
+    const gifts = {
+      total: categories.reduce((acc, c) => acc + c.giftedCount, 0),
+      byCategory: categories.map((c) => ({ name: c.name, count: c.giftedCount })),
+    };
 
     return {
       event: { reference: event.reference, title: event.title },
-      totals: { total, scanned, unused, cancelled, entryRate },
+      totals: { total, scanned, unused, cancelled, entryRate, capacity },
       byCategory,
       byAgent,
       timeline,
+      finances,
+      gifts,
     };
   }
 

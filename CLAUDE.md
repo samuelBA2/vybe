@@ -61,7 +61,7 @@ Login (`/auth/login/email`, `/auth/login/phone`) compares bcrypt hashes against 
 ### Authenticated routes and authorization
 `JwtAuthGuard` (in `src/auth/guards/`) manually verifies the bearer token via `JwtService` and attaches `{ sub, role }` to `request.user` — apply with `@UseGuards(JwtAuthGuard)`. `UsersController`'s `me`/`me/password`/`me/identifier` routes use `req.user.id` or `req.user.sub`.
 
-`RolesGuard` (`src/auth/guards/roles.guard.ts`) + `@Roles('ADMIN')` decorator (`src/auth/decorators/roles.decorator.ts`) — checks `request.user.role` against required roles. Used on `POST /events` to restrict creation to ADMIN. Apply with `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...)`. Currently all users are created with role `ADMIN`.
+`RolesGuard` (`src/auth/guards/roles.guard.ts`) + `@Roles(...)` decorator (`src/auth/decorators/roles.decorator.ts`) — checks `request.user.role` against required roles. The `Role` enum has two values: `USER` (tout inscrit : crée événements/agents, achète/offre des billets) and `AGENT` (agent de sécurité : scan des QR uniquement). Registration creates users with role `USER`; agent tokens carry role `AGENT`. Used e.g. on `POST /events` (`@Roles('USER')`) and `POST /agents/scan` (`@Roles('AGENT')`). Apply with `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...)`.
 
 ### Profile update limits
 `UsersService.update` enforces a max of 2 profile edits per calendar month, tracked via `profileUpdateCount`/`profileUpdateMonth`/`profileUpdateYear` on `User`. Usernames are checked against a reserved-word list loaded from `src/text/banned_usernames.txt` (path differs between dev `src/...` and prod `dist/...`, copied as an asset per `nest-cli.json`).
@@ -77,7 +77,7 @@ Two authenticated steps (`JwtAuthGuard`), modeled on the identifier-change flow:
 Soft-deleted accounts (`isValid = false`) are rejected at login (`loginEmail`/`loginPhone` and the OTP-verify steps in `auth.service`). The OTP message (email HTML reuses `MailService`'s design via `sendAccountDeletionOtp`; SMS reuses the same text) warns the user the account stays stored for two weeks. Automatic purge after 14 days and a recovery endpoint are not yet implemented.
 
 ### Event creation and moderation flow
-Full event creation in a single `POST /events` (authenticated, `ADMIN` only). The request includes event data + media (with exactly one poster `isPoster: true`) + 1–4 ticket categories (named freely, unlimited stock, each with a design URL). The client uploads files elsewhere and provides URLs — no upload pipeline in the backend.
+Full event creation in a single `POST /events` (authenticated, `USER` only). The request includes event data + media (with exactly one poster `isPoster: true`) + 1–4 ticket categories (named freely, unlimited stock, each with a design URL). The client uploads files elsewhere and provides URLs — no upload pipeline in the backend.
 
 **Workflow:**
 1. `POST /events` — `EventsService.createEvent` validates business rules (dates in future, end > start, purchaseDeadline ≤ start, termsAccepted = true, exactly 1 poster, 1–4 ticket categories), creates `Event` (status `PENDING_REVIEW`) + `EventMedia[]` + `TicketCategory[]` in a single Prisma `create` with nested writes, then sends a moderation email to `VYBE_TEAM_EMAIL` with all event details, poster image, ticket categories, and magic links (Approve/Reject).
