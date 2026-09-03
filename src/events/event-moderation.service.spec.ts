@@ -49,7 +49,11 @@ describe('EventModerationService', () => {
   });
 
   it('refuse un token du mauvais type', async () => {
-    jwt.verify.mockReturnValue({ sub: 'evt-1', type: 'login-verify', jti: 'j1' });
+    jwt.verify.mockReturnValue({
+      sub: 'evt-1',
+      type: 'login-verify',
+      jti: 'j1',
+    });
     await expect(service.moderate('x', 'approve')).rejects.toThrow(
       ForbiddenException,
     );
@@ -175,6 +179,7 @@ describe('EventModerationService', () => {
       id: 'evt-1',
       status: 'PENDING_REVIEW',
       title: 'Soirée',
+      createdById: 'owner',
       createdBy: { email: null },
     });
     await service.moderate('x', 'approve');
