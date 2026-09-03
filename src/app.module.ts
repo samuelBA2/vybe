@@ -18,6 +18,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { UploadsModule } from './uploads/uploads.module';
 import { AgentModule } from './agent/agent.module';
 import { OrderModule } from './orders/Order.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -29,13 +30,13 @@ import { OrderModule } from './orders/Order.module';
     PrismaModule,
     ScheduleModule.forRoot(),
     JwtModule.registerAsync({
-  imports: [ConfigModule],
-  inject: [ConfigService],
-  useFactory: (configService: ConfigService) => ({
-    secret: configService.get<string>('JWT_SECRET'),
-    signOptions: { expiresIn: '1h' },
-  }),
-}),
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: { expiresIn: '1h' },
+      }),
+    }),
     UsersModule,
     OtpModule,
     SmsModule,
@@ -44,7 +45,8 @@ import { OrderModule } from './orders/Order.module';
     CloudinaryModule,
     UploadsModule,
     AgentModule,
-    OrderModule
+    OrderModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [
