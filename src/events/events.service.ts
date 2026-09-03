@@ -11,6 +11,8 @@ import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { randomCode } from 'src/common/generate-code';
 import { buildPage, KeysetCursor } from 'src/common/pagination';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { notificationText } from 'src/notifications/notification-text';
 
 // Limite globale de l'application : nombre maximum de billets pour un événement en mode limité.
 const MAX_TOTAL_CAPACITY = 50000;
@@ -28,6 +30,7 @@ export class EventsService {
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
     private readonly moderationService: EventModerationService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // Liste publique : uniquement les événements validés par la modération,
@@ -301,6 +304,18 @@ export class EventsService {
     } catch (err) {
       this.logger.error(
         `Échec de l'envoi de l'email de modération pour l'événement ${event.id} après plusieurs tentatives`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
+
+    // Notification in-app de soumission (non bloquante : un échec ne compromet pas
+    // la création déjà persistée, comme pour l'e-mail).
+    try {
+      const t = notificationText.eventSubmitted(dto.title);
+      await this.notifications.create(userId, 'EVENT_SUBMITTED', t.title, t.body, event.id);
+    } catch (err) {
+      this.logger.error(
+        `Échec de création de la notification de soumission pour l'événement ${event.id}`,
         err instanceof Error ? err.stack : String(err),
       );
     }

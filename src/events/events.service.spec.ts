@@ -36,6 +36,7 @@ describe('EventsService.createEvent', () => {
   let prisma: any;
   let mail: any;
   let moderation: any;
+  let notifications: any;
 
   beforeEach(() => {
     const createdEvent = {
@@ -57,7 +58,8 @@ describe('EventsService.createEvent', () => {
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };
-    service = new EventsService(prisma, mail, moderation);
+    notifications = { create: jest.fn().mockResolvedValue(undefined) };
+    service = new EventsService(prisma, mail, moderation, notifications);
     process.env.API_BASE_URL = 'https://api.test';
     process.env.VYBE_TEAM_EMAIL = 'team@vybe.app';
   });
@@ -145,6 +147,17 @@ describe('EventsService.createEvent', () => {
     expect(res.message).toContain('validation');
   });
 
+  it('crée une notification de soumission au créateur (non bloquante)', async () => {
+    await service.createEvent('user-1', baseDto());
+    expect(notifications.create).toHaveBeenCalledWith(
+      'user-1',
+      'EVENT_SUBMITTED',
+      expect.stringContaining('soumis'),
+      expect.any(String),
+      'evt-1',
+    );
+  });
+
   describe('contrat carte (createdById + giftedCount)', () => {
     // Garde : findOne n'a aucun `select` restrictif (include complet), donc
     // createdById (scalaire Event) et giftedCount (scalaire TicketCategory)
@@ -176,6 +189,7 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
   let prisma: any;
   let mail: any;
   let moderation: any;
+  let notifications: any;
 
   beforeEach(() => {
     prisma = {
@@ -193,7 +207,8 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };
-    service = new EventsService(prisma, mail, moderation);
+    notifications = { create: jest.fn().mockResolvedValue(undefined) };
+    service = new EventsService(prisma, mail, moderation, notifications);
     process.env.API_BASE_URL = 'https://api.test';
     process.env.VYBE_TEAM_EMAIL = 'team@vybe.app';
   });

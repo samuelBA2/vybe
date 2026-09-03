@@ -8,6 +8,7 @@ import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { EventModerationService } from './event-moderation.service';
 import { CloudinaryModule } from 'src/cloudinary/cloudinary.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { CloudinaryModule } from 'src/cloudinary/cloudinary.module';
     CloudinaryModule,
     MailModule,
     AuthModule, // fournit JwtAuthGuard (réexporté)
+    NotificationsModule, // fournit NotificationsService (déclencheurs de notif)
     JwtModule.register({ secret: process.env.JWT_SECRET }),
   ],
   controllers: [EventsController],

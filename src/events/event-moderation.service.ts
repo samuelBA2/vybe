@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { MailService } from 'src/mail/mail.service';
+import { notificationText } from 'src/notifications/notification-text';
 
 interface ModerationPayload {
   sub: string;
@@ -78,6 +79,19 @@ export class EventModerationService {
         data: { status: newStatus, reviewedAt: new Date() },
       });
       await tx.usedToken.create({ data: { jti: payload.jti } });
+
+      const t = approved
+        ? notificationText.eventPublished(event.title)
+        : notificationText.eventRejected(event.title);
+      await tx.notification.create({
+        data: {
+          userId: event.createdById,
+          type: approved ? 'EVENT_PUBLISHED' : 'EVENT_REJECTED',
+          title: t.title,
+          body: t.body,
+          eventId: event.id,
+        },
+      });
     });
 
     // Notifier le créateur s'il a une adresse email.
