@@ -23,6 +23,7 @@ describe('EventModerationService', () => {
         create: jest.fn(),
       },
       event: { findUnique: jest.fn(), update: jest.fn() },
+      notification: { create: jest.fn() },
       $transaction: jest.fn(async (cb) => cb(prisma)),
     };
     mail = { sendEventDecisionEmail: jest.fn().mockResolvedValue(undefined) };
@@ -48,7 +49,11 @@ describe('EventModerationService', () => {
   });
 
   it('refuse un token du mauvais type', async () => {
-    jwt.verify.mockReturnValue({ sub: 'evt-1', type: 'login-verify', jti: 'j1' });
+    jwt.verify.mockReturnValue({
+      sub: 'evt-1',
+      type: 'login-verify',
+      jti: 'j1',
+    });
     await expect(service.moderate('x', 'approve')).rejects.toThrow(
       ForbiddenException,
     );
@@ -103,6 +108,7 @@ describe('EventModerationService', () => {
       id: 'evt-1',
       status: 'PENDING_REVIEW',
       title: 'Soirée',
+      createdById: 'owner',
       createdBy: { email: 'u@x.com' },
     });
     const res = await service.moderate('x', 'approve');
@@ -114,6 +120,13 @@ describe('EventModerationService', () => {
     );
     expect(prisma.usedToken.create).toHaveBeenCalledWith({
       data: { jti: 'j1' },
+    });
+    expect(prisma.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'owner',
+        type: 'EVENT_PUBLISHED',
+        eventId: expect.any(String),
+      }),
     });
     expect(mail.sendEventDecisionEmail).toHaveBeenCalledWith(
       'u@x.com',
@@ -133,6 +146,7 @@ describe('EventModerationService', () => {
       id: 'evt-1',
       status: 'PENDING_REVIEW',
       title: 'Soirée',
+      createdById: 'owner',
       createdBy: { email: 'u@x.com' },
     });
     await service.moderate('x', 'reject');
@@ -141,6 +155,13 @@ describe('EventModerationService', () => {
         data: expect.objectContaining({ status: 'REJECTED' }),
       }),
     );
+    expect(prisma.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'owner',
+        type: 'EVENT_REJECTED',
+        eventId: expect.any(String),
+      }),
+    });
     expect(mail.sendEventDecisionEmail).toHaveBeenCalledWith(
       'u@x.com',
       'Soirée',
@@ -158,6 +179,7 @@ describe('EventModerationService', () => {
       id: 'evt-1',
       status: 'PENDING_REVIEW',
       title: 'Soirée',
+      createdById: 'owner',
       createdBy: { email: null },
     });
     await service.moderate('x', 'approve');

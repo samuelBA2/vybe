@@ -101,3 +101,6 @@ Jest config in `package.json` includes `moduleNameMapper: { "^src/(.*)$": "<root
 ## Instructions
 
 - Ne pas ajouter "Co-Authored-By" dans les messages de commit git.
+- Toutes les analyses juridiques doivent couvrir les **deux** marchés visés par Vybe, en indiquant lequel s'applique selon le public de l'événement / de l'acheteur :
+  - **RDC** (public congolais) : droit commercial OHADA, droit de la consommation congolais, Code du numérique (loi n°23/010 du 13 mars 2023 — commerce électronique, protection des données, cybersécurité), fiscalité RDC (TVA 16 %, RCCM / Id. Nat. / NIF).
+  - **France / Union européenne** (public FR-UE) : droit commercial français (Code de commerce), droit de la consommation (ventes de produits en ligne), RGPD, et règlements européens récents (AI Act, DSA).

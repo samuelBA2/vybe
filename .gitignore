@@ -68,3 +68,6 @@ backup_*.sql
 
 # Recap interne d'audit (notes de travail, non versionnées)
 docs/recap-audit-securite.md
+
+# Documents légaux (non versionnés)
+docs/legal/
