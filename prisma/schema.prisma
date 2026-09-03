@@ -31,7 +31,8 @@ model User {
   agentAccess Agent[]
 
   orders Order[]
-  
+  notifications Notification[]
+
   otpVerications OtpVerification[]
 
   profileUpdatedAt  DateTime?  // date de la dernière modification
@@ -56,6 +57,30 @@ model User {
 model UsedToken {
   jti       String   @id
   createdAt DateTime @default(now())
+}
+
+enum NotificationType {
+  EVENT_SUBMITTED
+  EVENT_PUBLISHED
+  EVENT_REJECTED
+}
+
+// Notification in-app d'un utilisateur. Texte rendu (title/body en français) stocké
+// directement ; le `type` sert au frontend pour choisir l'icône/dégradé. eventId permet
+// le lien « Voir l'événement ». read = suivi lu/non-lu (badge cloche + mise en évidence).
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+  type      NotificationType
+  title     String
+  body      String
+  eventId   String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read])       // compteur des non-lues
+  @@index([userId, createdAt])  // liste chronologique
 }
 
 model EventParticipant {
