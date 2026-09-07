@@ -47,7 +47,7 @@ async function bootstrap() {
   // CORS : indispensable pour que le frontend (autre origine) puisse appeler l'API.
   // credentials: true → autorise le cookie httpOnly de refresh.
   // FRONTEND_URLS : liste d'origines autorisées séparées par des virgules.
-  const origins = (process.env.FRONTEND_URLS ?? 'http://localhost:8080')
+  const origins = (process.env.FRONTEND_URLS ?? 'http://localhost:8080',  "https://vybe-frontend-gamma.vercel.app")
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
