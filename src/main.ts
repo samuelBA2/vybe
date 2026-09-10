@@ -49,7 +49,7 @@ async function bootstrap() {
   // FRONTEND_URLS : liste d'origines autorisées séparées par des virgules.
   const origins = (
     process.env.FRONTEND_URLS ??
-    'http://localhost:8080,https://vybe-frontend-gamma.vercel.app'
+    'http://localhost:8080,https://vybeplatform.app,https://www.vybeplatform.app'
   )
     .split(',')
     .map((o) => o.trim())
