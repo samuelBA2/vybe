@@ -69,5 +69,9 @@ backup_*.sql
 # Recap interne d'audit (notes de travail, non versionnées)
 docs/recap-audit-securite.md
 
+# Notes de travail paiement (non versionnées)
+docs/notes-paiement.md
+docs/pawapay-onboarding-questions.docx
+
 # Documents légaux (non versionnés)
 docs/legal/
