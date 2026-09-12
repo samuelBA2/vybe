@@ -68,6 +68,20 @@ export const PLATFORM_FEE_RATE = 0.15 // 15%
 // frontend applique la même limite (compteur X/10 + désactivation du bouton).
 export const MAX_GIFTS_PER_CATEGORY = 10;
 
+// ─── Paiement (indépendant du fournisseur) ────────────────────────────────────
+// Taux de conversion USD → CDF FIGÉ pour la V1 (surchargeable en env). L'USD est
+// la base comptable (montants Order/ledger) ; le CDF sert l'affichage et certains
+// débits Mobile Money. À passer en taux « live » plus tard (Lot 2).
+// (La commission plateforme PLATFORM_FEE_RATE = 0.15 existe déjà ci-dessus.)
+export const USD_TO_CDF_RATE = Number(process.env.USD_TO_CDF_RATE ?? 2250); 
+
+// Délai (minutes) au-delà duquel une commande PENDING non payée est expirée par
+// le reaper. À garder > durée de vie du paiement côté fournisseur, pour ne jamais
+// expirer un paiement encore en cours de validation par l'acheteur.
+export const PAYMENT_PENDING_TTL_MINUTES = Number(
+  process.env.PAYMENT_PENDING_TTL_MINUTES ?? 25,
+);
+
 // ─── Photo de profil (avatar) ────────────────────────────────────────────────
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 Mo
 
