@@ -315,8 +315,8 @@ enum LedgerEntryType {
 model LedgerEntry {
   id        String          @id @default(uuid())
   account   LedgerAccount
-  userId    String
-  user      User            @relation(fields: [userId], references: [id])
+  userId    String 
+  user      User            @relation(fields: [userId], references: [id]) 
   type      LedgerEntryType
   amount    Float           // SIGNÉ : crédits > 0, débits (payout/refund) < 0
   currency  Currency        @default(USD) // ledger en USD = base comptable
