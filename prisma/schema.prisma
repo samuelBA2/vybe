@@ -32,6 +32,7 @@ model User {
 
   orders Order[]
   notifications Notification[]
+  ledgerEntries LedgerEntry[]
 
   otpVerications OtpVerification[]
 
@@ -249,10 +250,21 @@ model Order {
   ticketCategory   TicketCategory @relation(fields: [ticketCategoryId], references: [id])
   quantity         Int
   unitPrice        Float
+  // totalAmount/platformFee/organizerAmount restent en USD = base comptable.
   totalAmount      Float
   platformFee      Float
   organizerAmount  Float
+  // Devise réellement débitée à l'acheteur (USD ou CDF au taux figé USD_TO_CDF_RATE).
+  currency         Currency  @default(USD)
+  // Part de CETTE commande dans le montant réellement débité (dans `currency`) ;
+  // @default(0) pour les commandes existantes lors de la migration. Σ chargedAmount d'un
+  // paymentRef = montant total poussé au fournisseur.
+  chargedAmount    Float     @default(0)
+  // Id de transaction côté fournisseur (trace/réconciliation) ; posé après initPayment.
+  providerTxnId    String?
   paymentStatus    PaymentStatus @default(PENDING)
+  // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
+  // Format/longueur à finaliser au choix du fournisseur (certains limitent à 20 car.).
   paymentRef       String?
   createdAt        DateTime    @default(now())
 
@@ -261,14 +273,75 @@ model Order {
   // Filtre réel du dashboard : paymentStatus='PAID' AND ticketCategoryId IN (...).
   // Le composite couvre aussi les lookups par ticketCategoryId seul (préfixe).
   @@index([ticketCategoryId, paymentStatus])
+  // Webhook/reaper/status résolvent toutes les commandes d'un checkout par paymentRef.
+  @@index([paymentRef])
 }
 
 enum PaymentStatus {
   PENDING
   PAID
-  FAILED
-  REFUNDED
-  GIFT // billet offert par le créateur : montants 0, exclu du calcul financier (≠ PAID)
+  FAILED   // paiement refusé par le fournisseur
+  EXPIRED  // PENDING abandonné / timeout (reaper) : stock relâché, peut être re-honoré si payé tard
+  REVIEW   // accepté mais non résolvable automatiquement : résolution manuelle (règle : un paiement accepté ne reste jamais sans résolution)
+  REFUNDED // (Lot 2)
+  GIFT     // billet offert par le créateur : montants 0, exclu du calcul financier (≠ PAID)
+}
+
+// Devise d'un Order / d'une écriture de ledger. USD = base comptable ; CDF = franc congolais
+// (affichage + certains débits Mobile Money), converti au taux figé USD_TO_CDF_RATE.
+enum Currency {
+  USD
+  CDF
+}
+
+// Type de compte comptable virtuel d'une écriture de ledger.
+enum LedgerAccount {
+  ORGANIZER // dette de Vybe envers l'organisateur (IOU) = solde retirable (Lot 2)
+  PLATFORM  // revenu de Vybe (commission 15 %)
+}
+
+// Nature de l'écriture (le signe du montant confirme crédit/débit).
+enum LedgerEntryType {
+  SALE_ORGANIZER   // crédit organisateur au PAID (+)
+  SALE_PLATFORM    // crédit plateforme au PAID (+)
+  REFUND_ORGANIZER // (Lot 2) débit organisateur sur remboursement (-)
+  PAYOUT_ORGANIZER // (Lot 2) débit organisateur sur retrait Mobile Money (-)
+}
+
+// Écriture de ledger = SOURCE DE VÉRITÉ des soldes. Écrite dans la MÊME transaction que la
+// génération des billets au passage PAID. Le solde organisateur = SUM(amount) WHERE
+// userId=X AND account=ORGANIZER. L'argent réel (100 %) est chez le fournisseur sur le
+// compte marchand Vybe ; le split 85/15 est VIRTUEL (comptable), le ledger ne détient pas d'argent.
+model LedgerEntry {
+  id        String          @id @default(uuid())
+  account   LedgerAccount
+  userId    String
+  user      User            @relation(fields: [userId], references: [id])
+  type      LedgerEntryType
+  amount    Float           // SIGNÉ : crédits > 0, débits (payout/refund) < 0
+  currency  Currency        @default(USD) // ledger en USD = base comptable
+  orderId   String?
+  eventId   String?
+  createdAt DateTime        @default(now())
+
+  @@index([userId, account])   // solde par compte
+  @@index([userId, createdAt]) // historique keyset
+  @@index([orderId])           // réconciliation par commande
+}
+
+// Journal d'audit générique des échanges avec le fournisseur (séparé du ledger).
+// Sert la réconciliation par paymentRef / providerTxnId. Aucune donnée sensible
+// (numéro Mobile Money) n'y est persistée volontairement.
+model PaymentProviderLog {
+  id           String   @id @default(uuid())
+  paymentRef   String
+  direction    String   // 'INIT' | 'CHECK' | 'WEBHOOK' | 'AUTH'
+  requestBody  Json?
+  responseBody Json?
+  status       String?
+  createdAt    DateTime @default(now())
+
+  @@index([paymentRef])
 }
 
 // Billet individuel (1 billet = 1 QR code)
