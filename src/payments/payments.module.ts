@@ -1,23 +1,21 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from 'src/prisma/prisma.module';
+import { PAYMENT_PROVIDER } from './payment-provider.interface';
+import { PawaPayProvider } from './pawapay.provider';
 
-// Socle du module paiement — INDÉPENDANT du fournisseur (Task 3).
+// Module paiement. Le fournisseur concret (PawaPayProvider) est lié au token
+// d'injection PAYMENT_PROVIDER : tout le flux (createOrder, webhook, reaper,
+// comptabilité) dépend de l'interface via ce token, jamais de l'implémentation
+// → changer de fournisseur ne touche qu'à ce `useClass`.
 //
-// L'implémentation concrète du PaymentProvider (PawaPayProvider) et son binding
-// sur le token PAYMENT_PROVIDER seront ajoutés en Task 3b, une fois écrite :
+// ConfigModule est global (token/base URL/clé publique via ConfigService) ;
+// PrismaModule fournit PrismaService (audit PaymentProviderLog).
 //
-//   providers: [{ provide: PAYMENT_PROVIDER, useClass: PawaPayProvider }],
-//   exports:   [PAYMENT_PROVIDER],
-//
-// Tant que le provider concret n'existe pas, on n'expose RIEN : exporter le token
-// PAYMENT_PROVIDER sans provider lié casserait le bootstrap Nest. Les Tasks 4–7
-// consomment l'interface via un provider MOCKÉ dans leurs tests, pas ce module.
-//
-// Le controller webhook, le service et le reaper viendront enrichir ce module
-// (Tasks 5 & 7) ; l'enregistrement dans AppModule se fait en Task 10.
+// À venir : controller webhook + service (Task 5), reaper (Task 7) ;
+// enregistrement dans AppModule (Task 10).
 @Module({
   imports: [PrismaModule],
-  providers: [],
-  exports: [],
+  providers: [{ provide: PAYMENT_PROVIDER, useClass: PawaPayProvider }],
+  exports: [PAYMENT_PROVIDER],
 })
 export class PaymentsModule {}

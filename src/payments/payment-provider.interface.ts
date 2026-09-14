@@ -27,6 +27,11 @@ export interface InitPaymentInput {
   redirectUrl?: string;
   // Libellé présenté à l'acheteur, le cas échéant.
   description?: string;
+  // Champs spécifiques au PUSH Mobile Money (modèle B, ex. PawaPay). Optionnels au
+  // niveau du contrat (un checkout hébergé les ignore) mais REQUIS par un provider
+  // push, qui les valide à l'exécution.
+  operator?: string; // code opérateur du fournisseur (ex. VODACOM_MPESA_COD)
+  phoneNumber?: string; // numéro Mobile Money, chiffres uniquement, sans préfixe
 }
 
 export interface InitPaymentResult {
