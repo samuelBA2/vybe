@@ -370,3 +370,79 @@ describe('PawaPayProvider.verifyWebhookSignature', () => {
     expect(provider.verifyWebhookSignature(body, headers)).toBe(false);
   });
 });
+
+describe('PawaPayProvider.getOperators', () => {
+  let provider: PawaPayProvider;
+  let prisma: any;
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    const config = {
+      get: jest.fn((key: string) =>
+        ({
+          PAWAPAY_BASE_URL: 'https://api.sandbox.pawapay.io',
+          PAWAPAY_API_TOKEN: 'sandbox-token',
+        })[key],
+      ),
+    };
+    prisma = { paymentProviderLog: { create: jest.fn().mockResolvedValue({}) } };
+    provider = new PawaPayProvider(config as any, prisma);
+    fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+  });
+
+  it('GET /v2/active-conf : mappe les providers RDC (COD) avec dispo par statut DEPOSIT', async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        companyName: 'Vybe',
+        countries: [
+          {
+            country: 'COD',
+            providers: [
+              {
+                provider: 'VODACOM_MPESA_COD',
+                displayName: 'Vodacom M-Pesa',
+                logo: 'https://logo/voda.png',
+                currencies: [
+                  { currency: 'CDF', operationTypes: { DEPOSIT: { status: 'OPERATIONAL' } } },
+                  { currency: 'USD', operationTypes: { DEPOSIT: { status: 'OPERATIONAL' } } },
+                ],
+              },
+              {
+                provider: 'AIRTEL_COD',
+                displayName: 'Airtel Money',
+                currencies: [
+                  { currency: 'CDF', operationTypes: { DEPOSIT: { status: 'CLOSED' } } },
+                ],
+              },
+              {
+                provider: 'ONLY_PAYOUT_COD',
+                displayName: 'Sans dépôt',
+                currencies: [{ currency: 'CDF', operationTypes: { PAYOUT: { status: 'OPERATIONAL' } } }],
+              },
+            ],
+          },
+          { country: 'BEN', providers: [{ provider: 'MTN_MOMO_BEN', currencies: [] }] },
+        ],
+      }),
+    );
+
+    const ops = await provider.getOperators();
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.sandbox.pawapay.io/v2/active-conf');
+    expect(opts.headers.Authorization).toBe('Bearer sandbox-token');
+
+    // Seuls les providers RDC AVEC un DEPOSIT ; ONLY_PAYOUT exclu ; BEN ignoré.
+    expect(ops).toEqual([
+      { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, logoUrl: 'https://logo/voda.png', currencies: ['CDF', 'USD'] },
+      { code: 'AIRTEL_COD', name: 'Airtel Money', available: false, logoUrl: undefined, currencies: ['CDF'] },
+    ]);
+    expect(prisma.paymentProviderLog.create).toHaveBeenCalled();
+  });
+
+  it('HTTP non-2xx → lève', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ message: 'nope' }, false, 500));
+    await expect(provider.getOperators()).rejects.toThrow();
+  });
+});

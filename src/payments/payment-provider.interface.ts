@@ -61,6 +61,15 @@ export interface WebhookRequestContext {
   query?: string; // query brute sans le '?' (ex. 'a=1&b=2'), le cas échéant
 }
 
+// Opérateur Mobile Money exposé au front (dérivé de la config fournisseur).
+export interface ProviderOperator {
+  code: string; // code fournisseur exact (ex. 'VODACOM_MPESA_COD')
+  name: string; // nom affichable
+  available: boolean; // false si le dépôt est fermé (CLOSED) chez l'opérateur
+  logoUrl?: string;
+  currencies: ProviderCurrency[]; // devises supportant le DÉPÔT
+}
+
 export interface PaymentProvider {
   // Initie le paiement. Renvoie une paymentUrl (checkout hébergé) ou un simple
   // accusé (push Mobile Money).
@@ -80,6 +89,9 @@ export interface PaymentProvider {
     headers: Record<string, string>,
     context?: WebhookRequestContext,
   ): boolean;
+
+  // Liste les opérateurs Mobile Money disponibles pour le pays cible (dépôts).
+  getOperators(): Promise<ProviderOperator[]>;
 }
 
 // Token d'injection Nest. L'implémentation concrète est liée à ce token en Task 3b :

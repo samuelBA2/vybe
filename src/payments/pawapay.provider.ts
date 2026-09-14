@@ -9,6 +9,7 @@ import {
   InitPaymentResult,
   PaymentProvider,
   ProviderCurrency,
+  ProviderOperator,
   WebhookRequestContext,
 } from './payment-provider.interface';
 
@@ -30,6 +31,22 @@ interface PawaPayStatusResponse {
     currency?: string;
     providerTransactionId?: string;
   };
+}
+
+// Forme (partielle) de GET /v2/active-conf.
+interface PawaPayActiveConf {
+  countries?: Array<{
+    country?: string;
+    providers?: Array<{
+      provider: string;
+      displayName?: string;
+      logo?: string;
+      currencies?: Array<{
+        currency?: string;
+        operationTypes?: { DEPOSIT?: { status?: string } };
+      }>;
+    }>;
+  }>;
 }
 
 // Implémentation concrète du PaymentProvider pour PawaPay (agrégateur Mobile Money
@@ -174,6 +191,56 @@ export class PawaPayProvider implements PaymentProvider {
       deposit.amount !== undefined ? Number(deposit.amount) : undefined;
     const currency = deposit.currency as ProviderCurrency | undefined;
     return { status, amount, currency };
+  }
+
+  // Récupère la configuration active PawaPay et en dérive les opérateurs Mobile
+  // Money RDC (pays 'COD') proposant le DÉPÔT. `available=false` si le dépôt est
+  // CLOSED chez l'opérateur (affiché grisé côté front).
+  async getOperators(): Promise<ProviderOperator[]> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/v2/active-conf`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+    } catch (err) {
+      this.logger.error(`getOperators fetch a échoué: ${String(err)}`);
+      throw new Error('PawaPay injoignable (active-conf).');
+    }
+
+    let body: PawaPayActiveConf | undefined;
+    try {
+      body = (await res.json()) as PawaPayActiveConf;
+    } catch {
+      body = undefined;
+    }
+    await this.log('active-conf', 'CONF', {}, body, String(res.status));
+
+    if (!res.ok) {
+      throw new Error(`PawaPay active-conf: HTTP ${res.status}`);
+    }
+
+    const cod = body?.countries?.find((c) => c.country === 'COD');
+    const operators: ProviderOperator[] = [];
+    for (const p of cod?.providers ?? []) {
+      const depositEntries = (p.currencies ?? []).filter(
+        (c) => !!c.operationTypes?.DEPOSIT,
+      );
+      if (depositEntries.length === 0) continue; // pas de dépôt possible
+      const available = depositEntries.some(
+        (c) => c.operationTypes?.DEPOSIT?.status !== 'CLOSED',
+      );
+      operators.push({
+        code: p.provider,
+        name: p.displayName ?? p.provider,
+        available,
+        logoUrl: p.logo,
+        currencies: depositEntries
+          .map((c) => c.currency)
+          .filter((c): c is ProviderCurrency => c === 'USD' || c === 'CDF'),
+      });
+    }
+    return operators;
   }
 
   // Vérifie l'authenticité d'un callback PawaPay (RFC-9421, ecdsa-p256-sha256).
