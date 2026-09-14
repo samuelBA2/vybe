@@ -19,8 +19,9 @@ import type {
 // on considère qu'il y a divergence entre le montant confirmé et Σ chargedAmount.
 const AMOUNT_EPSILON = 0.01; // USD 1 centime = CDF 22,50 (≈ 23 CDF)
 
-// Résumé agrégé renvoyé au fournisseur (ACK 200) après traitement du callback.
-type WebhookOutcome = 'PAID' | 'FAILED' | 'REVIEW' | 'PENDING';
+// Résumé agrégé renvoyé au fournisseur (ACK 200) après traitement du callback,
+// ou au reaper. EXPIRED : PENDING abandonné/timeout expiré par le reaper.
+type WebhookOutcome = 'PAID' | 'FAILED' | 'REVIEW' | 'PENDING' | 'EXPIRED';
 
 // Forme (partielle) d'une commande chargée avec sa catégorie + événement.
 type OrderWithEvent = {
@@ -75,10 +76,24 @@ export class PaymentsService {
     // Trace d'audit (ne doit jamais casser le traitement).
     await this.log(paymentRef, rawBody);
 
-    // 3) Re-vérification serveur = source de vérité.
+    // Cœur de résolution (partagé avec le reaper). Sur non-paiement, le webhook
+    // ne tranche pas (attend le prochain callback) → pas d'expiration ici.
+    return this.resolvePayment(paymentRef);
+  }
+
+  // Re-vérifie côté serveur (source de vérité) et fait converger les commandes d'un
+  // checkout. Utilisé par le webhook ET le reaper. `expireStale` (reaper) : sur
+  // non-paiement, expire les commandes PENDING (EXPIRED + stock relâché) au lieu de
+  // les laisser en attente. Un paiement confirmé est toujours honoré (re-honore même
+  // une commande déjà EXPIRED si le stock est encore là).
+  async resolvePayment(
+    paymentRef: string,
+    opts?: { expireStale?: boolean },
+  ): Promise<{ paymentRef: string; status: WebhookOutcome }> {
+    // Re-vérification serveur = source de vérité (jamais le seul callback).
     const check = await this.payment.checkStatus(paymentRef);
 
-    // 4) Charger toutes les commandes du checkout (catégorie + événement).
+    // Charger toutes les commandes du checkout (catégorie + événement).
     const orders = (await this.prisma.order.findMany({
       where: { paymentRef },
       include: { ticketCategory: { include: { event: true } } },
@@ -95,8 +110,14 @@ export class PaymentsService {
       return { paymentRef, status: 'FAILED' };
     }
 
-    // Ni approuvé ni refusé (PROCESSING/NOT_FOUND) : on ne tranche pas.
+    // Ni approuvé ni refusé (PROCESSING/NOT_FOUND).
     if (check.status !== 'APPROVED' && check.status !== 'ACCEPTED') {
+      if (opts?.expireStale) {
+        // Reaper : le paiement traîne au-delà du TTL sans être confirmé → on libère
+        // le stock. EXPIRED (≠ FAILED) : un paiement tardif pourra re-honorer.
+        await this.expire(orders);
+        return { paymentRef, status: 'EXPIRED' };
+      }
       return { paymentRef, status: 'PENDING' };
     }
 
@@ -231,6 +252,24 @@ export class PaymentsService {
             data: { paymentStatus: 'FAILED' },
           });
         }
+      }
+    });
+  }
+
+  // Reaper : commandes PENDING abandonnées → EXPIRED + stock relâché. Les commandes
+  // déjà EXPIRED (stock déjà relâché) ou terminales sont ignorées.
+  private async expire(orders: OrderWithEvent[]): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      for (const order of orders) {
+        if (order.paymentStatus !== 'PENDING') continue;
+        await tx.$executeRaw`
+        UPDATE "TicketCategory"
+        SET "soldCount" = "soldCount" - ${order.quantity}
+        WHERE "id" = ${order.ticketCategoryId}`;
+        await tx.order.update({
+          where: { id: order.id },
+          data: { paymentStatus: 'EXPIRED' },
+        });
       }
     });
   }

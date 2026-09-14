@@ -264,4 +264,27 @@ describe('PaymentsService.handleWebhook', () => {
     expect(tx.order.update).not.toHaveBeenCalled();
     expect(res).toEqual(expect.objectContaining({ status: 'PENDING' }));
   });
+
+  // Cœur partagé avec le reaper : même chemin que le webhook (checkStatus défensif)
+  // mais, sur non-paiement, expire la commande PENDING au lieu de no-op.
+  describe('resolvePayment (reaper, expireStale)', () => {
+    it('non payé (PROCESSING) → EXPIRED + stock relâché', async () => {
+      mockCheck('PROCESSING');
+      const res = await service.resolvePayment(PAYMENT_REF, { expireStale: true });
+      expect(tx.$executeRaw).toHaveBeenCalled(); // décrément du stock réservé
+      expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ paymentStatus: 'EXPIRED' }),
+      }));
+      expect(tx.ticket.createMany).not.toHaveBeenCalled();
+      expect(res).toEqual(expect.objectContaining({ status: 'EXPIRED' }));
+    });
+
+    it('payé tardivement (COMPLETED) → re-honore en PAID + billets + ledger', async () => {
+      mockCheck('COMPLETED', '200');
+      const res = await service.resolvePayment(PAYMENT_REF, { expireStale: true });
+      expect(tx.ticket.createMany).toHaveBeenCalledTimes(1);
+      expect(tx.ledgerEntry.createMany).toHaveBeenCalledTimes(1);
+      expect(res).toEqual(expect.objectContaining({ status: 'PAID' }));
+    });
+  });
 });
