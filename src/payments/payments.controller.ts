@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Controller,
+  Get,
   Headers,
   HttpCode,
   Post,
@@ -9,6 +10,7 @@ import {
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { PaymentsService } from './payments.service';
+import { PaymentsConfigService } from './payments-config.service';
 import type { WebhookRequestContext } from './payment-provider.interface';
 
 // Endpoint PUBLIC (aucun JwtAuthGuard) : c'est le fournisseur (PawaPay) qui appelle.
@@ -17,7 +19,16 @@ import type { WebhookRequestContext } from './payment-provider.interface';
 // sur les octets exacts reçus, pas sur le JSON re-sérialisé.
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly payments: PaymentsService) {}
+  constructor(
+    private readonly payments: PaymentsService,
+    private readonly paymentsConfig: PaymentsConfigService,
+  ) {}
+
+  // Config publique du checkout : taux + opérateurs Mobile Money disponibles.
+  @Get('config')
+  async config() {
+    return this.paymentsConfig.getConfig();
+  }
 
   @Post('webhook')
   @HttpCode(200)

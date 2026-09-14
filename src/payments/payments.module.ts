@@ -5,6 +5,7 @@ import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import { PawaPayProvider } from './pawapay.provider';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
+import { PaymentsConfigService } from './payments-config.service';
 import { PaymentsCleanupService } from './payments.cleanup';
 import { EarningsController } from './earnings.controller';
 import { EarningsService } from './earnings.service';
@@ -26,6 +27,7 @@ import { EarningsService } from './earnings.service';
   providers: [
     { provide: PAYMENT_PROVIDER, useClass: PawaPayProvider },
     PaymentsService,
+    PaymentsConfigService,
     PaymentsCleanupService,
     EarningsService,
   ],
