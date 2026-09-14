@@ -10,7 +10,10 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
-import type { PaymentProvider } from './payment-provider.interface';
+import type {
+  PaymentProvider,
+  WebhookRequestContext,
+} from './payment-provider.interface';
 
 // Tolérance de comparaison des montants (USD à 2 décimales ; CDF entier). Au-delà,
 // on considère qu'il y a divergence entre le montant confirmé et Σ chargedAmount.
@@ -46,9 +49,12 @@ export class PaymentsService {
   async handleWebhook(
     rawBody: string,
     headers: Record<string, string>,
+    context?: WebhookRequestContext,
   ): Promise<{ paymentRef: string; status: WebhookOutcome }> {
     // 1) Authenticité du callback (RFC-9421 côté PawaPay). Rejet = 401, on s'arrête.
-    if (!this.payment.verifyWebhookSignature(rawBody, headers)) {
+    // `context` (méthode/chemin/authority) permet de vérifier une signature qui
+    // couvre des composants dérivés (prod PawaPay).
+    if (!this.payment.verifyWebhookSignature(rawBody, headers, context)) {
       throw new UnauthorizedException('Signature de webhook invalide.');
     }
 

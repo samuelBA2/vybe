@@ -9,6 +9,7 @@ import {
   InitPaymentResult,
   PaymentProvider,
   ProviderCurrency,
+  WebhookRequestContext,
 } from './payment-provider.interface';
 
 // Forme (partielle) de la réponse PawaPay à POST /v2/deposits.
@@ -182,9 +183,14 @@ export class PawaPayProvider implements PaymentProvider {
   //
   // NOTE : la clé publique PawaPay est ici lue depuis l'env PAWAPAY_PUBLIC_KEY.
   // À terme, la récupérer par `keyid` via le Public Keys endpoint (rotation).
+  //
+  // `context` (méthode/chemin/authority) permet de résoudre les composants DÉRIVÉS
+  // @method/@path/@authority signés par PawaPay en PRODUCTION. Sans lui, une
+  // signature qui les couvre est rejetée (fail-closed).
   verifyWebhookSignature(
     rawBody: string,
     headers: Record<string, string>,
+    context?: WebhookRequestContext,
   ): boolean {
     try {
       const digestHeader = this.header(headers, 'content-digest');
@@ -208,7 +214,7 @@ export class PawaPayProvider implements PaymentProvider {
       const signature = this.extractSignature(sigHeader, parsed.label);
       if (!signature) return false;
 
-      const base = this.buildSignatureBase(headers, parsed);
+      const base = this.buildSignatureBase(headers, parsed, context);
       if (base === null) return false; // composant non résolvable → fail-closed
 
       return cryptoVerify(
@@ -279,22 +285,48 @@ export class PawaPayProvider implements PaymentProvider {
   }
 
   // Construit la base de signature (RFC-9421 §2.5) à partir des composants couverts.
-  // On ne résout que les composants issus des HEADERS + @signature-params ; tout
-  // composant dérivé non résolvable (@method, @path, @authority…) → null (fail-closed),
-  // car l'interface ne fournit que le corps et les headers.
+  // Composants issus des HEADERS résolus directement ; composants DÉRIVÉS (@method,
+  // @path, @authority, @query) résolus depuis `context` (fourni par le contrôleur
+  // depuis la requête). Tout composant non résolvable (contexte absent, ou dérivé
+  // non supporté) → null (fail-closed).
   private buildSignatureBase(
     headers: Record<string, string>,
     parsed: { components: string[]; params: string },
+    context?: WebhookRequestContext,
   ): string | null {
     const lines: string[] = [];
     for (const comp of parsed.components) {
-      if (comp.startsWith('@')) return null; // dérivé non résolvable ici
-      const val = this.header(headers, comp);
-      if (val === undefined) return null;
+      const val = comp.startsWith('@')
+        ? this.resolveDerived(comp, context)
+        : this.header(headers, comp);
+      if (val === undefined) return null; // non résolvable → fail-closed
       lines.push(`"${comp}": ${val}`);
     }
     lines.push(`"@signature-params": ${parsed.params}`);
     return lines.join('\n');
+  }
+
+  // Résout un composant DÉRIVÉ RFC-9421 (§2.2) depuis le contexte requête. On ne
+  // supporte que ceux effectivement signés par PawaPay ; tout autre → undefined
+  // (fail-closed). @method majuscule, @authority minuscule, @query préfixée de '?'
+  // (ou '?' seul si vide), conformément à la spec.
+  private resolveDerived(
+    comp: string,
+    context?: WebhookRequestContext,
+  ): string | undefined {
+    if (!context) return undefined;
+    switch (comp) {
+      case '@method':
+        return context.method.toUpperCase();
+      case '@authority':
+        return context.authority.toLowerCase();
+      case '@path':
+        return context.path;
+      case '@query':
+        return context.query ? `?${context.query}` : '?';
+      default:
+        return undefined; // composant dérivé non supporté
+    }
   }
 
   // Statut de dépôt PawaPay → vocabulaire normalisé du contrat PaymentProvider.

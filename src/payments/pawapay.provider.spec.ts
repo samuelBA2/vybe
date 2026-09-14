@@ -255,6 +255,33 @@ describe('PawaPayProvider.verifyWebhookSignature', () => {
     };
   }
 
+  // Variante PRODUCTION : la base de signature couvre aussi les composants DÉRIVÉS
+  // @method / @path / @authority (en plus de content-digest), comme PawaPay en prod.
+  function signedCallbackProd(
+    rawBody: string,
+    ctx: { method: string; path: string; authority: string },
+  ) {
+    const digest =
+      'sha-512=:' + createHash('sha512').update(rawBody).digest('base64') + ':';
+    const params =
+      '("@method" "@path" "@authority" "content-digest");created=1700000000;keyid="test-key";alg="ecdsa-p256-sha256"';
+    const base =
+      `"@method": ${ctx.method.toUpperCase()}\n` +
+      `"@path": ${ctx.path}\n` +
+      `"@authority": ${ctx.authority.toLowerCase()}\n` +
+      `"content-digest": ${digest}\n` +
+      `"@signature-params": ${params}`;
+    const sig = cryptoSign('sha256', Buffer.from(base), {
+      key: privateKey,
+      dsaEncoding: 'ieee-p1363',
+    }).toString('base64');
+    return {
+      'content-digest': digest,
+      'signature-input': `sig1=${params}`,
+      signature: `sig1=:${sig}:`,
+    };
+  }
+
   beforeEach(() => {
     const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     privateKey = pair.privateKey;
@@ -315,5 +342,31 @@ describe('PawaPayProvider.verifyWebhookSignature', () => {
 
   it('headers de signature manquants → false', () => {
     expect(provider.verifyWebhookSignature('{}', {})).toBe(false);
+  });
+
+  const prodCtx = {
+    method: 'POST',
+    path: '/payments/webhook',
+    authority: 'api.vybeplatform.app',
+  };
+
+  it('callback PROD (@method/@path/@authority) + contexte correct → true', () => {
+    const body = JSON.stringify({ depositId: 'abc', status: 'COMPLETED' });
+    const headers = signedCallbackProd(body, prodCtx);
+    expect(provider.verifyWebhookSignature(body, headers, prodCtx)).toBe(true);
+  });
+
+  it('composants dérivés mais contexte incohérent (path ≠) → false', () => {
+    const body = JSON.stringify({ depositId: 'abc', status: 'COMPLETED' });
+    const headers = signedCallbackProd(body, prodCtx);
+    expect(
+      provider.verifyWebhookSignature(body, headers, { ...prodCtx, path: '/autre' }),
+    ).toBe(false);
+  });
+
+  it('composants dérivés mais AUCUN contexte fourni → false (fail-closed)', () => {
+    const body = JSON.stringify({ depositId: 'abc', status: 'COMPLETED' });
+    const headers = signedCallbackProd(body, prodCtx);
+    expect(provider.verifyWebhookSignature(body, headers)).toBe(false);
   });
 });

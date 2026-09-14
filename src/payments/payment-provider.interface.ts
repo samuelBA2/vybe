@@ -49,6 +49,18 @@ export interface CheckStatusResult {
   currency?: ProviderCurrency;
 }
 
+// Contexte de la requête HTTP entrante, nécessaire pour vérifier une signature
+// RFC-9421 qui couvre des composants DÉRIVÉS (@method / @path / @authority) — ce
+// que PawaPay fait en PRODUCTION (le sandbox ne couvre que "content-digest"). Le
+// corps + les headers ne suffisent pas à les résoudre : le contrôleur les fournit
+// depuis la requête. Optionnel : un fournisseur qui ne signe que le corps l'ignore.
+export interface WebhookRequestContext {
+  method: string; // ex. 'POST'
+  path: string; // chemin de la cible, sans query (ex. '/payments/webhook')
+  authority: string; // autorité/hôte de l'URL appelée (ex. 'api.vybeplatform.app')
+  query?: string; // query brute sans le '?' (ex. 'a=1&b=2'), le cas échéant
+}
+
 export interface PaymentProvider {
   // Initie le paiement. Renvoie une paymentUrl (checkout hébergé) ou un simple
   // accusé (push Mobile Money).
@@ -60,9 +72,13 @@ export interface PaymentProvider {
 
   // Vérifie l'authenticité d'un webhook/callback (signature/HMAC propre au
   // fournisseur) sur le corps EXACT reçu. Renvoie false = rejeter (401).
+  // `context` fournit méthode/chemin/authority pour les signatures RFC-9421 qui
+  // couvrent des composants dérivés (@method/@path/@authority) — requis en prod
+  // PawaPay ; sans lui, une telle signature est rejetée (fail-closed).
   verifyWebhookSignature(
     rawBody: string,
     headers: Record<string, string>,
+    context?: WebhookRequestContext,
   ): boolean;
 }
 
