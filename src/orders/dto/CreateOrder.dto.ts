@@ -1,5 +1,6 @@
-import { IsUUID, IsInt, Min, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested } from "class-validator";
+import { IsUUID, IsInt, Min, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsEnum, IsString, Matches } from "class-validator";
 import { Type } from "class-transformer";
+import { $Enums } from "@prisma/client";
 
 // Une ligne de panier : une catégorie + une quantité (jamais de prix — le
 // montant fait foi côté serveur).
@@ -21,4 +22,22 @@ export class CreateOrderDto {
     @ValidateNested({ each: true })
     @Type(() => OrderItemDto)
     items : OrderItemDto[];
+
+    // Devise réellement débitée à l'acheteur. USD = solde USD de l'acheteur ;
+    // CDF = solde CDF (converti au taux figé USD_TO_CDF_RATE). Pilote le portefeuille
+    // Mobile Money débité côté fournisseur.
+    @IsEnum($Enums.Currency, { message: 'Devise invalide (USD ou CDF).' })
+    currency : $Enums.Currency;
+
+    // ─── Push Mobile Money (PawaPay) ────────────────────────────────────────────
+    // Code opérateur du fournisseur (ex. VODACOM_MPESA_COD). Fourni par le frontend
+    // depuis la liste des opérateurs disponibles.
+    @IsString()
+    @Matches(/^[A-Z0-9_]+$/, { message: 'Opérateur Mobile Money invalide.' })
+    operator : string;
+
+    // Numéro Mobile Money : chiffres uniquement, sans préfixe international ni +.
+    @IsString()
+    @Matches(/^\d{6,15}$/, { message: 'Numéro Mobile Money invalide.' })
+    phoneNumber : string;
 }

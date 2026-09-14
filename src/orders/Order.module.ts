@@ -8,9 +8,10 @@ import { MyTicketsController } from "./MyTickets.controller";
 import { MyTicketsService } from "./MyTickets.service";
 import { GiftService } from "./Gift.service";
 import { GiftsController } from "./Gifts.controller";
+import { PaymentsModule } from "src/payments/payments.module";
 
 @Module({
-    imports: [PrismaModule, AuthModule, TicketAssetModule],
+    imports: [PrismaModule, AuthModule, TicketAssetModule, PaymentsModule],
     controllers: [OrdersController, MyTicketsController, GiftsController],
     providers: [OrderService, MyTicketsService, GiftService]
 })
