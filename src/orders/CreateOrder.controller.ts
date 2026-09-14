@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Req, UseGuards } from "@nestjs/common";
+import { Controller, Post, Get, Body, Param, Req, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from "src/auth/guards/jwt-auth.guard";
 import { RolesGuard } from "src/auth/guards/roles.guard";
 import { Roles } from "src/auth/decorators/roles.decorator";
@@ -14,5 +14,12 @@ export class OrdersController {
     @Post()
     async create(@Req() req, @Body() dto: CreateOrderDto) {
         return this.ordersService.createOrder(req.user.sub, dto)
+    }
+
+    // Polling du front après paiement (push Mobile Money). Scope à l'utilisateur
+    // courant (req.user.sub) : réponse neutre si la référence n'est pas à lui.
+    @Get(':paymentRef/status')
+    async status(@Req() req, @Param('paymentRef') paymentRef: string) {
+        return this.ordersService.getPaymentStatus(req.user.sub, paymentRef)
     }
 }

@@ -149,4 +149,38 @@ export class OrderService {
             status: 'PENDING' as const,
         };
     }
+
+    // Statut agrégé d'un checkout (les N commandes d'un paymentRef), pour le polling
+    // du front après paiement. Scope STRICT à l'utilisateur : on ne révèle jamais
+    // une référence qui n'est pas à lui (réponse neutre = 404). ticketIds fournis
+    // seulement si PAID (ids seuls — le qrToken ne sort que par l'endpoint gardé).
+    async getPaymentStatus(userId: string, paymentRef: string) {
+        const orders = await this.prisma.order.findMany({
+            where: { userId, paymentRef },
+            select: { id: true, paymentStatus: true, currency: true, chargedAmount: true },
+        });
+        if (orders.length === 0) {
+            throw new NotFoundException('Paiement introuvable.');
+        }
+
+        const statuses = orders.map((o) => o.paymentStatus);
+        let status: 'PENDING' | 'PAID' | 'FAILED' | 'REVIEW';
+        if (statuses.some((s) => s === 'PENDING')) status = 'PENDING';
+        else if (statuses.some((s) => s === 'REVIEW')) status = 'REVIEW';
+        else if (statuses.every((s) => s === 'PAID')) status = 'PAID';
+        // Terminal mixte (une partie PAID, une partie FAILED/EXPIRED) = anomalie
+        // (un checkout est payé d'un bloc) → résolution manuelle.
+        else if (statuses.some((s) => s === 'PAID')) status = 'REVIEW';
+        else status = 'FAILED'; // toutes FAILED/EXPIRED
+
+        const chargedAmount = orders.reduce((s, o) => s + o.chargedAmount, 0);
+        const base = { paymentRef, status, currency: orders[0].currency, chargedAmount };
+        if (status !== 'PAID') return base;
+
+        const tickets = await this.prisma.ticket.findMany({
+            where: { orderId: { in: orders.map((o) => o.id) } },
+            select: { id: true },
+        });
+        return { ...base, ticketIds: tickets.map((t) => t.id) };
+    }
 }

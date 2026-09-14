@@ -21,7 +21,7 @@ describe('OrderService', () => {
   let prisma: {
     ticketCategory: { findMany: jest.Mock };
     ticket: { findMany: jest.Mock };
-    order: { updateMany: jest.Mock };
+    order: { updateMany: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let provider: {
@@ -42,7 +42,10 @@ describe('OrderService', () => {
     prisma = {
       ticketCategory: { findMany: jest.fn() },
       ticket: { findMany: jest.fn().mockResolvedValue([]) },
-      order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      order: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn(),
+      },
       // $transaction exécute le callback en lui injectant notre faux tx.
       // Un throw du callback se propage (en vrai, Prisma annulerait la transaction).
       $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
@@ -276,5 +279,69 @@ describe('OrderService', () => {
     expect(tx.$executeRaw.mock.calls.length).toBeGreaterThan(1);
     // Toujours aucun billet.
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
+  });
+
+  describe('getPaymentStatus', () => {
+    it('aucune commande pour cet utilisateur/référence → 404 (neutre)', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+      await expect(
+        service.getPaymentStatus('user-1', 'ref-x'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('scope strict : findMany filtre par userId ET paymentRef', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 100 },
+      ]);
+      await service.getPaymentStatus('user-9', 'ref-9');
+      expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { userId: 'user-9', paymentRef: 'ref-9' },
+      }));
+    });
+
+    it('toutes PENDING → status PENDING, pas de ticketIds', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 100 },
+      ]);
+      const res = await service.getPaymentStatus('user-1', 'ref-1');
+      expect(res).toEqual(expect.objectContaining({
+        paymentRef: 'ref-1', status: 'PENDING', currency: 'USD', chargedAmount: 100,
+      }));
+      expect((res as any).ticketIds).toBeUndefined();
+      expect(prisma.ticket.findMany).not.toHaveBeenCalled();
+    });
+
+    it('toutes PAID → status PAID + ticketIds (ids seulement, jamais le qrToken)', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PAID', currency: 'USD', chargedAmount: 100 },
+        { id: 'o2', paymentStatus: 'PAID', currency: 'USD', chargedAmount: 50 },
+      ]);
+      prisma.ticket.findMany.mockResolvedValue([{ id: 't1' }, { id: 't2' }, { id: 't3' }]);
+      const res = await service.getPaymentStatus('user-1', 'ref-1');
+      expect(res.status).toBe('PAID');
+      expect(res.chargedAmount).toBe(150);
+      expect((res as any).ticketIds).toEqual(['t1', 't2', 't3']);
+      expect(prisma.ticket.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { orderId: { in: ['o1', 'o2'] } },
+        select: { id: true },
+      }));
+    });
+
+    it('refusé/expiré → status FAILED', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'FAILED', currency: 'USD', chargedAmount: 100 },
+      ]);
+      const res = await service.getPaymentStatus('user-1', 'ref-1');
+      expect(res.status).toBe('FAILED');
+    });
+
+    it('mélange PAID + non payé → REVIEW (anomalie signalée)', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PAID', currency: 'USD', chargedAmount: 100 },
+        { id: 'o2', paymentStatus: 'EXPIRED', currency: 'USD', chargedAmount: 50 },
+      ]);
+      const res = await service.getPaymentStatus('user-1', 'ref-1');
+      expect(res.status).toBe('REVIEW');
+    });
   });
 });
