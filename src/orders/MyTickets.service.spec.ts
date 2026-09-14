@@ -116,7 +116,7 @@ describe('MyTicketsService', () => {
       .find(isUpcomingArgs);
 
     // Ne charge que les billets de cet utilisateur, hors billets offerts (onglet dédié).
-    expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: { not: 'GIFT' } });
+    expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: 'PAID' });
     // Règle des 24h : non annulé OU annulé depuis moins de 24h.
     expect(args.where.OR[0]).toEqual({ qrStatus: { not: 'CANCELLED' } });
     const cutoff = args.where.OR[1].cancelledAt.gte.getTime();
@@ -132,7 +132,7 @@ describe('MyTicketsService', () => {
       .map((c) => c[0])
       .find((a) => !isUpcomingArgs(a));
 
-    expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: { not: 'GIFT' } });
+    expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: 'PAID' });
     expect(args.where.ticketCategory.event.endDate.lt).toBeInstanceOf(Date);
     // Tri : le plus récent d'abord.
     expect(args.orderBy[0].ticketCategory.event.startDate).toBe('desc');
@@ -179,10 +179,10 @@ describe('MyTicketsService', () => {
   });
 
   describe('getMyGifts', () => {
-    it('billets normaux exclus des onglets upcoming/past (filtre paymentStatus != GIFT)', async () => {
+    it('seuls les billets PAID apparaissent dans upcoming/past (filtre paymentStatus = PAID)', async () => {
       await service.getMyTickets('user-1');
       const args = prisma.ticket.findMany.mock.calls[0][0];
-      expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: { not: 'GIFT' } });
+      expect(args.where.order).toEqual({ userId: 'user-1', paymentStatus: 'PAID' });
     });
 
     it('offerts visibles : UNUSED + giftDownloadedAt null, groupés par événement', async () => {
