@@ -52,7 +52,10 @@ export class EarningsService {
   // catégorie → sert la liste ET le drill-down sans second appel.
   async getEventsBreakdown(userId: string) {
     const events = await this.prisma.event.findMany({
-      where: { createdById: userId },
+      // Scope strict à l'organisateur, limité aux statuts comptables :
+      // PUBLISHED (en vente) et CLOSED (terminé). Les brouillons, événements
+      // en revue, refusés ou annulés n'ont pas de recettes à afficher.
+      where: { createdById: userId, status: { in: ['PUBLISHED', 'CLOSED'] } },
       orderBy: { startDate: 'desc' },
       select: {
         reference: true,

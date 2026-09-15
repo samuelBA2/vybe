@@ -138,9 +138,16 @@ describe('EarningsService', () => {
 
       const res = await service.getEventsBreakdown('org-1');
 
-      // Scope strict aux événements de l'organisateur.
+      // Scope strict aux événements de l'organisateur, limité aux statuts
+      // comptables (PUBLISHED/CLOSED) : brouillons, en revue, refusés et
+      // annulés n'apparaissent pas dans la comptabilité.
       expect(prisma.event.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { createdById: 'org-1' } }),
+        expect.objectContaining({
+          where: {
+            createdById: 'org-1',
+            status: { in: ['PUBLISHED', 'CLOSED'] },
+          },
+        }),
       );
       // Agrégat PAID uniquement, sur toutes les catégories des événements.
       expect(prisma.order.groupBy).toHaveBeenCalledWith(
