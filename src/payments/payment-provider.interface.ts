@@ -65,9 +65,12 @@ export interface WebhookRequestContext {
 export interface ProviderOperator {
   code: string; // code fournisseur exact (ex. 'VODACOM_MPESA_COD')
   name: string; // nom affichable
-  available: boolean; // false si le dépôt est fermé (CLOSED) chez l'opérateur
+  available: boolean; // true ssi `currencies` est non vide (invariant côté front)
   logoUrl?: string;
-  currencies: ProviderCurrency[]; // devises supportant le DÉPÔT
+  // Devises pour lesquelles le DÉPÔT est utilisable MAINTENANT (status ≠ CLOSED).
+  // Une devise CLOSED chez cet opérateur est exclue (ex. opérateur USD=OK,
+  // CDF=CLOSED → currencies=['USD']), jamais proposée telle quelle par PawaPay.
+  currencies: ProviderCurrency[];
 }
 
 export interface PaymentProvider {

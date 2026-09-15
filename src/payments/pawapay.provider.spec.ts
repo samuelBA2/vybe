@@ -415,6 +415,17 @@ describe('PawaPayProvider.getOperators', () => {
                   { currency: 'CDF', operationTypes: { DEPOSIT: { status: 'CLOSED' } } },
                 ],
               },
+              // Cas mixte (bug corrigé) : USD dispo mais CDF fermé chez CET
+              // opérateur → doit rester `available:true` mais n'annoncer QUE l'USD
+              // (sinon PawaPay rejette une init en CDF pourtant affichée possible).
+              {
+                provider: 'MIXED_COD',
+                displayName: 'Orange Money',
+                currencies: [
+                  { currency: 'USD', operationTypes: { DEPOSIT: { status: 'OPERATIONAL' } } },
+                  { currency: 'CDF', operationTypes: { DEPOSIT: { status: 'CLOSED' } } },
+                ],
+              },
               {
                 provider: 'ONLY_PAYOUT_COD',
                 displayName: 'Sans dépôt',
@@ -434,9 +445,13 @@ describe('PawaPayProvider.getOperators', () => {
     expect(opts.headers.Authorization).toBe('Bearer sandbox-token');
 
     // Seuls les providers RDC AVEC un DEPOSIT ; ONLY_PAYOUT exclu ; BEN ignoré.
+    // AIRTEL : CDF CLOSED → filtré de `currencies`, donc available:false.
+    // MIXED : USD OK / CDF CLOSED → available:true mais currencies=['USD'] SEUL
+    // (c'est exactement le bug corrigé : ne plus annoncer une devise CLOSED).
     expect(ops).toEqual([
       { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, logoUrl: 'https://logo/voda.png', currencies: ['CDF', 'USD'] },
-      { code: 'AIRTEL_COD', name: 'Airtel Money', available: false, logoUrl: undefined, currencies: ['CDF'] },
+      { code: 'AIRTEL_COD', name: 'Airtel Money', available: false, logoUrl: undefined, currencies: [] },
+      { code: 'MIXED_COD', name: 'Orange Money', available: true, logoUrl: undefined, currencies: ['USD'] },
     ]);
     expect(prisma.paymentProviderLog.create).toHaveBeenCalled();
   });
@@ -444,5 +459,60 @@ describe('PawaPayProvider.getOperators', () => {
   it('HTTP non-2xx → lève', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ message: 'nope' }, false, 500));
     await expect(provider.getOperators()).rejects.toThrow();
+  });
+
+  it('cache : deux appels successifs dans le TTL ne déclenchent qu\'un seul fetch upstream', async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        countries: [
+          {
+            country: 'COD',
+            providers: [
+              {
+                provider: 'VODACOM_MPESA_COD',
+                displayName: 'Vodacom M-Pesa',
+                currencies: [
+                  { currency: 'USD', operationTypes: { DEPOSIT: { status: 'OPERATIONAL' } } },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const first = await provider.getOperators();
+    const second = await provider.getOperators();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it('cache : un échec upstream n\'est PAS mis en cache (le prochain appel retente)', async () => {
+    fetchMock.mockResolvedValueOnce(fakeResponse({ message: 'boom' }, false, 500));
+    await expect(provider.getOperators()).rejects.toThrow();
+
+    fetchMock.mockResolvedValueOnce(
+      fakeResponse({
+        countries: [
+          {
+            country: 'COD',
+            providers: [
+              {
+                provider: 'VODACOM_MPESA_COD',
+                displayName: 'Vodacom M-Pesa',
+                currencies: [
+                  { currency: 'USD', operationTypes: { DEPOSIT: { status: 'OPERATIONAL' } } },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const ops = await provider.getOperators();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(ops).toHaveLength(1);
   });
 });

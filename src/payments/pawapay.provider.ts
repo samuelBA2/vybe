@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { createHash, createPublicKey, verify as cryptoVerify } from 'crypto';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { PAWAPAY_OPERATORS_CACHE_TTL_MS } from 'src/common/constants';
 import {
   CheckStatusResult,
   InitPaymentInput,
@@ -62,6 +63,14 @@ export class PawaPayProvider implements PaymentProvider {
   private readonly logger = new Logger(PawaPayProvider.name);
   private readonly baseUrl: string;
   private readonly token: string;
+
+  // Cache mémoire (process, instance = singleton Nest) du résultat de
+  // getOperators(). On cache la PROMESSE (pas juste la valeur) pour aussi
+  // collapser les appels concurrents (rafale) en un seul fetch upstream. Un
+  // échec n'est JAMAIS mis en cache (voir catch dans getOperators) : le
+  // prochain appel retente immédiatement.
+  private operatorsCache?: Promise<ProviderOperator[]>;
+  private operatorsCacheExpiresAt = 0;
 
   constructor(
     private readonly config: ConfigService,
@@ -194,9 +203,40 @@ export class PawaPayProvider implements PaymentProvider {
   }
 
   // Récupère la configuration active PawaPay et en dérive les opérateurs Mobile
-  // Money RDC (pays 'COD') proposant le DÉPÔT. `available=false` si le dépôt est
-  // CLOSED chez l'opérateur (affiché grisé côté front).
+  // Money RDC (pays 'COD') proposant le DÉPÔT. `available`/`currencies` sont mis
+  // en cache un court instant (voir `fetchOperators`) : `GET /payments/config`
+  // est un endpoint PUBLIC appelé à chaque chargement du checkout, on évite donc
+  // de taper PawaPay à chaque requête.
   async getOperators(): Promise<ProviderOperator[]> {
+    if (this.operatorsCache && Date.now() < this.operatorsCacheExpiresAt) {
+      return this.operatorsCache;
+    }
+
+    const promise = this.fetchOperators();
+    this.operatorsCache = promise;
+    this.operatorsCacheExpiresAt = Date.now() + PAWAPAY_OPERATORS_CACHE_TTL_MS;
+    // Un échec ne doit JAMAIS rester en cache : on efface aussitôt pour que le
+    // prochain appel retente un fetch upstream (pas de panne figée).
+    promise.catch(() => {
+      if (this.operatorsCache === promise) {
+        this.operatorsCache = undefined;
+        this.operatorsCacheExpiresAt = 0;
+      }
+    });
+    return promise;
+  }
+
+  // Corps réel de l'appel PawaPay /v2/active-conf, isolé de getOperators() pour
+  // que celle-ci ne porte que la logique de cache.
+  //
+  // Dispo PAR DEVISE : un opérateur reste listé dès qu'il propose ≥1 devise en
+  // DÉPÔT (même toutes CLOSED, pour que le front l'affiche grisé), mais
+  // `currencies` ne contient que celles RÉELLEMENT utilisables maintenant
+  // (DEPOSIT.status ≠ CLOSED). `available = currencies.length > 0` : un
+  // opérateur mixte (ex. USD=OPERATIONAL, CDF=CLOSED) reste `available` mais
+  // n'annonce QUE l'USD — sinon PawaPay rejetterait une init en CDF pourtant
+  // affichée comme possible.
+  private async fetchOperators(): Promise<ProviderOperator[]> {
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}/v2/active-conf`, {
@@ -226,18 +266,19 @@ export class PawaPayProvider implements PaymentProvider {
       const depositEntries = (p.currencies ?? []).filter(
         (c) => !!c.operationTypes?.DEPOSIT,
       );
-      if (depositEntries.length === 0) continue; // pas de dépôt possible
-      const available = depositEntries.some(
-        (c) => c.operationTypes?.DEPOSIT?.status !== 'CLOSED',
-      );
+      if (depositEntries.length === 0) continue; // pas de dépôt possible : exclu
+
+      const currencies = depositEntries
+        .filter((c) => c.operationTypes?.DEPOSIT?.status !== 'CLOSED')
+        .map((c) => c.currency)
+        .filter((c): c is ProviderCurrency => c === 'USD' || c === 'CDF');
+
       operators.push({
         code: p.provider,
         name: p.displayName ?? p.provider,
-        available,
+        available: currencies.length > 0,
         logoUrl: p.logo,
-        currencies: depositEntries
-          .map((c) => c.currency)
-          .filter((c): c is ProviderCurrency => c === 'USD' || c === 'CDF'),
+        currencies,
       });
     }
     return operators;

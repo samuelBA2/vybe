@@ -82,6 +82,13 @@ export const PAYMENT_PENDING_TTL_MINUTES = Number(
   process.env.PAYMENT_PENDING_TTL_MINUTES ?? 25,
 );
 
+// Durée de cache (ms) du résultat de PawaPayProvider.getOperators() (appel
+// GET /v2/active-conf). GET /payments/config est un endpoint PUBLIC lu à
+// chaque chargement du checkout : sans cache, une rafale de requêtes tape
+// PawaPay à chaque fois (risque de rate-limit / coût / dispo). Les échecs ne
+// sont jamais mis en cache (voir PawaPayProvider.getOperators).
+export const PAWAPAY_OPERATORS_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+
 // ─── Photo de profil (avatar) ────────────────────────────────────────────────
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 Mo
 
