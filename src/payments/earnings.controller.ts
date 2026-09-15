@@ -21,6 +21,12 @@ export class EarningsController {
     return this.earnings.getSummary(req.user.sub);
   }
 
+  // Recettes par événement (liste + détail par catégorie), lecture seule.
+  @Get('earnings/events')
+  async events(@Req() req: AuthedRequest) {
+    return this.earnings.getEventsBreakdown(req.user.sub);
+  }
+
   // Historique des ventes créditées (ledger ORGANIZER), keyset : ?limit=&cursor=.
   @Get('earnings/history')
   async history(

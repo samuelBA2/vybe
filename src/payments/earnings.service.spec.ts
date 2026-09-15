@@ -1,12 +1,13 @@
 import { EarningsService } from './earnings.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { USD_TO_CDF_RATE } from 'src/common/constants';
+import { PLATFORM_FEE_RATE, USD_TO_CDF_RATE } from 'src/common/constants';
 
 describe('EarningsService', () => {
   let service: EarningsService;
   let prisma: {
     ledgerEntry: { aggregate: jest.Mock; findMany: jest.Mock };
-    order: { aggregate: jest.Mock };
+    order: { aggregate: jest.Mock; groupBy: jest.Mock };
+    event: { findMany: jest.Mock };
   };
 
   beforeEach(() => {
@@ -19,7 +20,9 @@ describe('EarningsService', () => {
         aggregate: jest.fn().mockResolvedValue({
           _sum: { totalAmount: null, platformFee: null, organizerAmount: null },
         }),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
+      event: { findMany: jest.fn().mockResolvedValue([]) },
     };
     service = new EarningsService(prisma as unknown as PrismaService);
   });
@@ -101,6 +104,92 @@ describe('EarningsService', () => {
           { createdAt: new Date('2026-09-02T10:00:00.000Z'), id: { lt: 'l2' } },
         ],
       }));
+    });
+  });
+
+  describe('getEventsBreakdown', () => {
+    it('agrège par événement via catégories (PAID only), net=85 %, revenu par catégorie, scope createdById', async () => {
+      prisma.event.findMany.mockResolvedValue([
+        {
+          reference: 'evt_1',
+          title: 'Soirée',
+          startDate: new Date('2026-10-02T20:00:00.000Z'),
+          status: 'PUBLISHED',
+          ticketCategories: [
+            { id: 'c1', name: 'Standard' },
+            { id: 'c2', name: 'VIP' },
+          ],
+          mediaFiles: [{ url: 'https://poster/1.jpg' }],
+        },
+        {
+          reference: 'evt_2',
+          title: 'Sans vente',
+          startDate: new Date('2026-11-01T18:00:00.000Z'),
+          status: 'PUBLISHED',
+          ticketCategories: [{ id: 'c3', name: 'Base' }],
+          mediaFiles: [],
+        },
+      ]);
+      prisma.order.groupBy.mockResolvedValue([
+        { ticketCategoryId: 'c1', _sum: { totalAmount: 80, platformFee: 12, organizerAmount: 68, quantity: 8 }, _count: 5 },
+        { ticketCategoryId: 'c2', _sum: { totalAmount: 20, platformFee: 3, organizerAmount: 17, quantity: 2 }, _count: 2 },
+        // c3 absent → événement 2 sans vente
+      ]);
+
+      const res = await service.getEventsBreakdown('org-1');
+
+      // Scope strict aux événements de l'organisateur.
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { createdById: 'org-1' } }),
+      );
+      // Agrégat PAID uniquement, sur toutes les catégories des événements.
+      expect(prisma.order.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          by: ['ticketCategoryId'],
+          where: { paymentStatus: 'PAID', ticketCategoryId: { in: ['c1', 'c2', 'c3'] } },
+        }),
+      );
+
+      expect(res.usdToCdfRate).toBe(USD_TO_CDF_RATE);
+      expect(res.platformFeeRate).toBe(PLATFORM_FEE_RATE);
+      expect(res.events).toEqual([
+        {
+          reference: 'evt_1',
+          title: 'Soirée',
+          startDate: new Date('2026-10-02T20:00:00.000Z'),
+          posterUrl: 'https://poster/1.jpg',
+          status: 'PUBLISHED',
+          gross: 100,
+          commission: 15,
+          net: 85,
+          soldTickets: 10,
+          paidOrders: 7,
+          categories: [
+            { id: 'c1', name: 'Standard', soldTickets: 8, revenue: 80 },
+            { id: 'c2', name: 'VIP', soldTickets: 2, revenue: 20 },
+          ],
+        },
+        {
+          reference: 'evt_2',
+          title: 'Sans vente',
+          startDate: new Date('2026-11-01T18:00:00.000Z'),
+          posterUrl: null,
+          status: 'PUBLISHED',
+          gross: 0,
+          commission: 0,
+          net: 0,
+          soldTickets: 0,
+          paidOrders: 0,
+          categories: [{ id: 'c3', name: 'Base', soldTickets: 0, revenue: 0 }],
+        },
+      ]);
+    });
+
+    it('aucun événement → liste vide, groupBy non appelé', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+      const res = await service.getEventsBreakdown('org-1');
+      expect(res.events).toEqual([]);
+      expect(prisma.order.groupBy).not.toHaveBeenCalled();
     });
   });
 });
