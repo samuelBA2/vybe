@@ -175,20 +175,20 @@ describe('OrderService', () => {
       { ticketCategoryId: 'cat-2', quantity: 1 },
     ]));
 
-    expect(PLATFORM_FEE_RATE).toBe(0.15);
-    // cat-1 : 2×100 = 200 (fee 30, org 170), PENDING, chargedAmount USD = 200.
+    expect(PLATFORM_FEE_RATE).toBe(0.2);
+    // cat-1 : 2×100 = 200 (fee 40, org 160), PENDING, chargedAmount USD = 200.
     expect(tx.order.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
       data: expect.objectContaining({
         userId: 'user-1', ticketCategoryId: 'cat-1', quantity: 2,
-        totalAmount: 200, platformFee: 30, organizerAmount: 170,
+        totalAmount: 200, platformFee: 40, organizerAmount: 160,
         currency: 'USD', chargedAmount: 200, paymentStatus: 'PENDING',
       }),
     }));
-    // cat-2 : 1×50 = 50 (fee 7.5, org 42.5), chargedAmount USD = 50.
+    // cat-2 : 1×50 = 50 (fee 10, org 40), chargedAmount USD = 50.
     expect(tx.order.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
       data: expect.objectContaining({
         ticketCategoryId: 'cat-2', quantity: 1,
-        totalAmount: 50, platformFee: 7.5, organizerAmount: 42.5,
+        totalAmount: 50, platformFee: 10, organizerAmount: 40,
         currency: 'USD', chargedAmount: 50, paymentStatus: 'PENDING',
       }),
     }));

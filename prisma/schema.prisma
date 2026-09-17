@@ -33,6 +33,7 @@ model User {
   orders Order[]
   notifications Notification[]
   ledgerEntries LedgerEntry[]
+  payouts Payout[]
 
   otpVerications OtpVerification[]
 
@@ -306,6 +307,7 @@ enum LedgerEntryType {
   SALE_PLATFORM    // crédit plateforme au PAID (+)
   REFUND_ORGANIZER // (Lot 2) débit organisateur sur remboursement (-)
   PAYOUT_ORGANIZER // (Lot 2) débit organisateur sur retrait Mobile Money (-)
+  PAYOUT_REVERSAL   // (Lot 2) re-crédit organisateur sur échec de payout (+)
 }
 
 // Écriture de ledger = SOURCE DE VÉRITÉ des soldes. Écrite dans la MÊME transaction que la
@@ -323,10 +325,44 @@ model LedgerEntry {
   orderId   String?
   eventId   String?
   createdAt DateTime        @default(now())
+  payoutId  String?         // rattache PAYOUT_ORGANIZER / PAYOUT_REVERSAL à un Payout
+  payout    Payout?         @relation(fields: [payoutId], references: [id])
 
   @@index([userId, account])   // solde par compte
   @@index([userId, createdAt]) // historique keyset
   @@index([orderId])           // réconciliation par commande
+  @@index([payoutId])
+}
+
+// Retrait organisateur (payout Mobile Money). Le débit ledger PAYOUT_ORGANIZER est
+// écrit à la confirmation OTP (réservation), le PAYOUT_REVERSAL sur échec. Le numéro
+// destinataire est stocké en clair (mouvement d'argent sortant : traçabilité/support).
+model Payout {
+  id               String       @id @default(uuid())
+  payoutRef        String       @unique
+  userId           String
+  user             User         @relation(fields: [userId], references: [id])
+  amountUSD        Float        // débité du ledger (base comptable)
+  amountCDF        Int          // réellement envoyé (entier)
+  rate             Float        // USD_TO_CDF_RATE figé à l'instant du retrait
+  operator         String       // code opérateur PawaPay
+  destination      String       // numéro MoMo (en clair)
+  status           PayoutStatus @default(PENDING)
+  providerPayoutId String?
+  createdAt        DateTime     @default(now())
+  resolvedAt       DateTime?
+
+  ledgerEntries    LedgerEntry[]
+
+  @@index([userId, createdAt]) // historique keyset
+  @@index([status])            // reaper
+}
+
+enum PayoutStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVIEW   // mouvement sortant non résolvable automatiquement : résolution manuelle
 }
 
 // Journal d'audit générique des échanges avec le fournisseur (séparé du ledger).

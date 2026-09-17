@@ -28,7 +28,7 @@ export interface ScanDashboardResponseDto {
         net: number;          // Σ organizerAmount (PAID)
         paidOrders: number;   // nb commandes PAID
         soldTickets: number;  // Σ quantity (PAID)
-        feeRate: number;      // taux de commission fixe prélevé sur chaque achat (PLATFORM_FEE_RATE, ex. 0.15)
+        feeRate: number;      // taux de commission fixe prélevé sur chaque achat (PLATFORM_FEE_RATE, ex. 0.20)
     }
     // Espace « offerts gratuitement » : comptage des billets offerts, séparé du
     // calcul financier (les GIFT ne sont jamais des ventes PAID).

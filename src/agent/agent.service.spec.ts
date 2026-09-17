@@ -450,7 +450,7 @@ describe('AgentService', () => {
       const res = await service.getScanDashboard('owner', 'VYBE-8JGBLV');
 
       expect(res.finances).toEqual({
-        gross: 300, platformFee: 30, net: 270, paidOrders: 2, soldTickets: 3, feeRate: 0.15,
+        gross: 300, platformFee: 30, net: 270, paidOrders: 2, soldTickets: 3, feeRate: 0.2,
       });
       expect(res.finances.gross).toBe(res.finances.platformFee + res.finances.net);
       expect(res.byCategory[0].revenue).toBe(300);

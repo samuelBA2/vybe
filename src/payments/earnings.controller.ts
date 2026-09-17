@@ -15,7 +15,7 @@ interface AuthedRequest {
 export class EarningsController {
   constructor(private readonly earnings: EarningsService) {}
 
-  // Solde disponible + ventilation (brut / commission 15 % / net) + taux CDF.
+  // Solde disponible + ventilation (brut / commission 20 % / net) + taux CDF.
   @Get('earnings')
   async summary(@Req() req: AuthedRequest) {
     return this.earnings.getSummary(req.user.sub);
