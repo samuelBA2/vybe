@@ -85,6 +85,19 @@ describe('PayoutsService', () => {
       expect(res.status).toBe('FAILED');
     });
 
+    it('initPayout qui lève (erreur transport) → Payout reste PENDING, PAS de reversal', async () => {
+      provider.initPayout.mockRejectedValue(new Error('network'));
+      const res = await service.verifyPayout('org-1', '123456', 'temp.jwt');
+      expect(res.status).toBe('PENDING');
+      const reversal = prisma.ledgerEntry.create.mock.calls.find(
+        (c: any[]) => c[0].data.type === 'PAYOUT_REVERSAL',
+      );
+      expect(reversal).toBeUndefined();
+      expect(prisma.payout.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+      );
+    });
+
     it('refuse un token dont le type n\'est pas "payout" (aucun mouvement d\'argent)', async () => {
       jwt.verify.mockReturnValue({
         sub: 'org-1',
@@ -133,6 +146,16 @@ describe('PayoutsService', () => {
         (c: any[]) => c[0].data.type === 'PAYOUT_REVERSAL',
       );
       expect(reversal).toBeTruthy();
+    });
+
+    it('DECLINED → reverse() prend le verrou advisory par user avant d\'écrire la reversal', async () => {
+      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', amountUSD: 50, status: 'PENDING' });
+      provider.checkPayoutStatus.mockResolvedValue({ status: 'DECLINED' });
+      await service.resolvePayout('ref');
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        expect.stringContaining('pg_advisory_xact_lock'),
+        expect.anything(),
+      );
     });
   });
 });

@@ -110,7 +110,11 @@ export class PayoutsService {
   }
 
   // Étape 2 : vérifie token + OTP, débite le ledger + crée le Payout (transaction +
-  // verrou par user), puis initPayout HORS transaction. Échec init → reversal + FAILED.
+  // verrou par user), puis initPayout HORS transaction. Rejet EXPLICITE du provider
+  // (statut retourné ≠ PENDING/ACCEPTED) → reversal + FAILED (l'argent n'est pas parti).
+  // Erreur réseau/transport (throw) → Payout laissé PENDING, PAS de reversal : le
+  // reaper (Task 5) réconciliera via checkPayoutStatus (source de vérité), car un
+  // timeout peut survenir alors que le décaissement a bel et bien eu lieu côté PawaPay.
   async verifyPayout(userId: string, otp: string, tempToken: string) {
     let payload: {
       sub: string;
@@ -176,7 +180,6 @@ export class PayoutsService {
     });
 
     // Initiation HORS transaction (appel réseau).
-    let initStatus: string;
     try {
       const init = await this.payment.initPayout({
         payoutRef,
@@ -185,26 +188,30 @@ export class PayoutsService {
         operator: payload.operator,
         phoneNumber: payload.phoneNumber,
       });
-      initStatus = init.status;
       if (init.providerPayoutId) {
         await this.prisma.payout.update({
           where: { id: payout.id },
           data: { providerPayoutId: init.providerPayoutId },
         });
       }
+      // Rejet EXPLICITE renvoyé par le provider : l'argent n'est pas parti, on
+      // annule le débit tout de suite.
+      if (init.status !== 'PENDING' && init.status !== 'ACCEPTED') {
+        await this.reverse(payout.id, userId, amountUSD, 'FAILED');
+        return {
+          payoutRef,
+          status: 'FAILED' as PayoutOutcome,
+          amountUSD,
+          amountCDF,
+        };
+      }
     } catch (err) {
-      this.logger.error(`initPayout a échoué (${payoutRef}): ${String(err)}`);
-      initStatus = 'DECLINED';
-    }
-
-    if (initStatus !== 'PENDING' && initStatus !== 'ACCEPTED') {
-      await this.reverse(payout.id, userId, amountUSD, 'FAILED');
-      return {
-        payoutRef,
-        status: 'FAILED' as PayoutOutcome,
-        amountUSD,
-        amountCDF,
-      };
+      // Erreur réseau/transport : on ne sait pas si l'argent est parti ou non.
+      // On NE reverse PAS et on NE marque PAS FAILED — le Payout reste PENDING,
+      // le reaper le réconciliera via checkPayoutStatus.
+      this.logger.error(
+        `initPayout a échoué (${payoutRef}), Payout laissé PENDING pour réconciliation: ${String(err)}`,
+      );
     }
     return {
       payoutRef,
@@ -251,8 +258,10 @@ export class PayoutsService {
     return { payoutRef, status: 'PENDING' };
   }
 
-  // Reversal idempotent : PENDING→(FAILED|REVIEW) + PAYOUT_REVERSAL (+) écrit une
-  // seule fois (garde par count sur payoutId/type), dans une transaction.
+  // Reversal idempotent : verrou advisory par user (première instruction de la
+  // transaction) pour sérialiser les reverses concurrents du même user (course
+  // webhook + reaper sur le même Payout), puis PENDING→(FAILED|REVIEW) +
+  // PAYOUT_REVERSAL (+) écrit une seule fois (garde par count sur payoutId/type).
   private async reverse(
     payoutId: string,
     userId: string,
@@ -260,6 +269,10 @@ export class PayoutsService {
     status: 'FAILED' | 'REVIEW',
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        userId,
+      );
       const already = await tx.ledgerEntry.count({
         where: { payoutId, type: 'PAYOUT_REVERSAL' },
       });
