@@ -11,6 +11,7 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { PaymentsService } from './payments.service';
 import { PaymentsConfigService } from './payments-config.service';
+import { PayoutsService } from './payouts.service';
 import type { WebhookRequestContext } from './payment-provider.interface';
 
 // Endpoint PUBLIC (aucun JwtAuthGuard) : c'est le fournisseur (PawaPay) qui appelle.
@@ -22,6 +23,7 @@ export class PaymentsController {
   constructor(
     private readonly payments: PaymentsService,
     private readonly paymentsConfig: PaymentsConfigService,
+    private readonly payouts: PayoutsService,
   ) {}
 
   // Config publique du checkout : taux + opérateurs Mobile Money disponibles.
@@ -55,5 +57,31 @@ export class PaymentsController {
     };
 
     return this.payments.handleWebhook(raw.toString('utf8'), headers, context);
+  }
+
+  // Callback payout PawaPay (public, signé). Signature fail-closed dans le provider,
+  // re-vérif via checkPayoutStatus. Corps : { payoutId }.
+  @Post('payout-webhook')
+  @HttpCode(200)
+  async payoutWebhook(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers() headers: Record<string, string>,
+  ) {
+    const raw = req.rawBody;
+    if (!raw) throw new BadRequestException('Corps de webhook absent.');
+
+    const qIndex = req.originalUrl.indexOf('?');
+    const context: WebhookRequestContext = {
+      method: req.method,
+      path: req.path,
+      authority:
+        (req.headers['x-forwarded-host'] as string) ?? req.headers.host ?? '',
+      query: qIndex >= 0 ? req.originalUrl.slice(qIndex + 1) : undefined,
+    };
+    return this.payouts.handlePayoutWebhook(
+      raw.toString('utf8'),
+      headers,
+      context,
+    );
   }
 }

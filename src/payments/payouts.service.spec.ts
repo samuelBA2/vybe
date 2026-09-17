@@ -1,5 +1,9 @@
 import { PayoutsService } from './payouts.service';
-import { ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 
 describe('PayoutsService', () => {
   let service: PayoutsService;
@@ -28,6 +32,7 @@ describe('PayoutsService', () => {
       getOperators: jest.fn().mockResolvedValue([
         { code: 'VODACOM_MPESA_COD', name: 'Vodacom', available: true, currencies: ['CDF', 'USD'] },
       ]),
+      verifyWebhookSignature: jest.fn().mockReturnValue(true),
     };
     otp = { sendPayoutEmailOtp: jest.fn(), sendPayoutPhoneOtp: jest.fn(), verifyOtp: jest.fn() };
     jwt = {
@@ -156,6 +161,44 @@ describe('PayoutsService', () => {
         expect.stringContaining('pg_advisory_xact_lock'),
         expect.anything(),
       );
+    });
+  });
+
+  describe('handlePayoutWebhook', () => {
+    it('signature invalide → 401, sans résolution (resolvePayout non appelé)', async () => {
+      provider.verifyWebhookSignature.mockReturnValue(false);
+      const resolveSpy = jest.spyOn(service, 'resolvePayout');
+
+      await expect(
+        service.handlePayoutWebhook('{"payoutId":"ref"}', {}),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(resolveSpy).not.toHaveBeenCalled();
+    });
+
+    it('signature valide → délègue à resolvePayout(payoutId)', async () => {
+      const resolveSpy = jest
+        .spyOn(service, 'resolvePayout')
+        .mockResolvedValue({ payoutRef: 'ref', status: 'COMPLETED' });
+
+      const res = await service.handlePayoutWebhook(
+        '{"payoutId":"ref"}',
+        { 'x-sig': 'ok' },
+      );
+
+      expect(resolveSpy).toHaveBeenCalledWith('ref');
+      expect(res).toEqual({ payoutRef: 'ref', status: 'COMPLETED' });
+    });
+
+    it('corps illisible → BadRequestException', async () => {
+      await expect(
+        service.handlePayoutWebhook('pas-du-json', {}),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('payoutId absent → BadRequestException', async () => {
+      await expect(
+        service.handlePayoutWebhook('{}', {}),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

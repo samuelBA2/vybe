@@ -295,6 +295,29 @@ export class PayoutsService {
     });
   }
 
+  // Callback payout PawaPay (public, signé). Miroir de PaymentsService.handleWebhook.
+  // Signature fail-closed via le provider ; extraction de NOTRE référence (payoutId),
+  // puis résolution via checkPayoutStatus (source de vérité) dans resolvePayout.
+  async handlePayoutWebhook(
+    rawBody: string,
+    headers: Record<string, string>,
+    context?: import('./payment-provider.interface').WebhookRequestContext,
+  ): Promise<{ payoutRef: string; status: PayoutOutcome }> {
+    if (!this.payment.verifyWebhookSignature(rawBody, headers, context)) {
+      throw new UnauthorizedException('Signature de webhook invalide.');
+    }
+    let parsed: { payoutId?: string };
+    try {
+      parsed = JSON.parse(rawBody) as { payoutId?: string };
+    } catch {
+      throw new BadRequestException('Corps de webhook illisible.');
+    }
+    if (!parsed.payoutId) {
+      throw new BadRequestException('Référence de payout absente du webhook.');
+    }
+    return this.resolvePayout(parsed.payoutId);
+  }
+
   // Normalise un numéro RDC en 12 chiffres (243XXXXXXXXX) ou null. (Miroir de la
   // logique front normalizeMobileNumber, côté serveur = source de vérité.)
   private normalizeMsisdn(raw: string): string | null {
