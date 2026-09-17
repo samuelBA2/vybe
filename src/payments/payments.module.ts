@@ -9,6 +9,9 @@ import { PaymentsConfigService } from './payments-config.service';
 import { PaymentsCleanupService } from './payments.cleanup';
 import { EarningsController } from './earnings.controller';
 import { EarningsService } from './earnings.service';
+import { PayoutsController } from './payouts.controller';
+import { PayoutsService } from './payouts.service';
+import { PayoutsCleanupService } from './payouts.cleanup';
 
 // Module paiement. Le fournisseur concret (PawaPayProvider) est lié au token
 // d'injection PAYMENT_PROVIDER : tout le flux (createOrder, webhook, reaper,
@@ -19,17 +22,20 @@ import { EarningsService } from './earnings.service';
 // PrismaModule fournit PrismaService (audit PaymentProviderLog).
 //
 // Webhook (POST /payments/webhook) + service + reaper + comptabilité organisateur
-// (GET /me/earnings) branchés (Tasks 5, 7, 8). AuthModule fournit JwtService pour
-// JwtAuthGuard (EarningsController). À venir : enregistrement dans AppModule (Task 10).
+// (GET /me/earnings) + retrait (/me/payouts) branchés (Tasks 5, 7, 8, 10).
+// AuthModule fournit JwtService pour JwtAuthGuard/RolesGuard (EarningsController,
+// PayoutsController). À venir : enregistrement dans AppModule (Task 10 finale).
 @Module({
   imports: [PrismaModule, AuthModule],
-  controllers: [PaymentsController, EarningsController],
+  controllers: [PaymentsController, EarningsController, PayoutsController],
   providers: [
     { provide: PAYMENT_PROVIDER, useClass: PawaPayProvider },
     PaymentsService,
     PaymentsConfigService,
     PaymentsCleanupService,
     EarningsService,
+    PayoutsService,
+    PayoutsCleanupService,
   ],
   exports: [PAYMENT_PROVIDER],
 })

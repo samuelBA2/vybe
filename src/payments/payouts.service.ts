@@ -16,6 +16,7 @@ import {
   PAYOUT_MIN_AMOUNT,
   USD_TO_CDF_RATE,
 } from 'src/common/constants';
+import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type { PaymentProvider } from './payment-provider.interface';
 import { EarningsService } from './earnings.service';
@@ -316,6 +317,62 @@ export class PayoutsService {
       throw new BadRequestException('Référence de payout absente du webhook.');
     }
     return this.resolvePayout(parsed.payoutId);
+  }
+
+  // Historique des retraits de l'utilisateur, tri chronologique décroissant,
+  // pagination keyset sur (createdAt desc, payoutRef desc). Miroir de
+  // EarningsService.getHistory.
+  async listPayouts(
+    userId: string,
+    limit: number,
+    cursor: KeysetCursor | null,
+  ): Promise<Paginated<unknown>> {
+    const rows = await this.prisma.payout.findMany({
+      where: {
+        userId,
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.v) } },
+                { createdAt: new Date(cursor.v), payoutRef: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { payoutRef: 'desc' }],
+      take: limit + 1,
+      select: {
+        payoutRef: true,
+        amountUSD: true,
+        amountCDF: true,
+        operator: true,
+        destination: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    return buildPage(rows, limit, (r) => ({
+      v: r.createdAt.toISOString(),
+      id: r.payoutRef,
+    }));
+  }
+
+  // Suivi (polling front) : scope strict à l'utilisateur — un retrait d'un
+  // autre utilisateur renvoie un 404 neutre, jamais un 403 (pas de fuite
+  // d'existence).
+  async getPayoutStatus(userId: string, payoutRef: string) {
+    const p = await this.prisma.payout.findFirst({
+      where: { payoutRef, userId },
+      select: {
+        payoutRef: true,
+        status: true,
+        amountUSD: true,
+        amountCDF: true,
+      },
+    });
+    if (!p) throw new NotFoundException('Retrait introuvable.');
+    return p;
   }
 
   // Normalise un numéro RDC en 12 chiffres (243XXXXXXXXX) ou null. (Miroir de la

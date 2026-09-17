@@ -20,6 +20,8 @@ describe('PayoutsService', () => {
         create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: 'p1', ...data })),
         update: jest.fn().mockResolvedValue({}),
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
       },
       ledgerEntry: { create: jest.fn().mockResolvedValue({}), count: jest.fn().mockResolvedValue(0) },
       $transaction: jest.fn().mockImplementation(async (fn: any) => fn(prisma)),
@@ -199,6 +201,56 @@ describe('PayoutsService', () => {
       await expect(
         service.handlePayoutWebhook('{}', {}),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('lecture', () => {
+    it('getPayoutStatus scope strict userId (404 neutre sinon)', async () => {
+      prisma.payout.findFirst = jest.fn().mockResolvedValue(null);
+      await expect(service.getPayoutStatus('org-1', 'ref')).rejects.toThrow();
+    });
+
+    it('getPayoutStatus renvoie le statut quand trouvé (scope userId)', async () => {
+      prisma.payout.findFirst = jest.fn().mockResolvedValue({
+        payoutRef: 'ref', status: 'PENDING', amountUSD: 50, amountCDF: 112500,
+      });
+      const res = await service.getPayoutStatus('org-1', 'ref');
+      expect(prisma.payout.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: { payoutRef: 'ref', userId: 'org-1' },
+      }));
+      expect(res.status).toBe('PENDING');
+    });
+
+    it('listPayouts trie createdAt desc, keyset paginé (nextCursor si page suivante)', async () => {
+      const rows = [
+        { payoutRef: 'p3', amountUSD: 10, amountCDF: 22500, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-03T10:00:00Z') },
+        { payoutRef: 'p2', amountUSD: 20, amountCDF: 45000, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-02T10:00:00Z') },
+        { payoutRef: 'p1', amountUSD: 30, amountCDF: 67500, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'PENDING', createdAt: new Date('2026-09-01T10:00:00Z') },
+      ];
+      prisma.payout.findMany.mockResolvedValue(rows); // limit=2 → 3 lignes = page suivante
+
+      const res = await service.listPayouts('org-1', 2, null);
+
+      expect(prisma.payout.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { userId: 'org-1' },
+        orderBy: [{ createdAt: 'desc' }, { payoutRef: 'desc' }],
+        take: 3,
+      }));
+      expect(res.items).toHaveLength(2);
+      expect(res.nextCursor).not.toBeNull();
+    });
+
+    it('listPayouts applique le curseur keyset (createdAt/payoutRef) quand fourni', async () => {
+      prisma.payout.findMany.mockResolvedValue([]);
+      await service.listPayouts('org-1', 20, { v: '2026-09-02T10:00:00.000Z', id: 'p2' });
+      const arg = prisma.payout.findMany.mock.calls[0][0];
+      expect(arg.where).toEqual(expect.objectContaining({
+        userId: 'org-1',
+        OR: [
+          { createdAt: { lt: new Date('2026-09-02T10:00:00.000Z') } },
+          { createdAt: new Date('2026-09-02T10:00:00.000Z'), payoutRef: { lt: 'p2' } },
+        ],
+      }));
     });
   });
 });
