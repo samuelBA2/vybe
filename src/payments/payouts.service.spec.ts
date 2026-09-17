@@ -84,6 +84,36 @@ describe('PayoutsService', () => {
       expect(reversal[0].data.amount).toBeGreaterThan(0);
       expect(res.status).toBe('FAILED');
     });
+
+    it('refuse un token dont le type n\'est pas "payout" (aucun mouvement d\'argent)', async () => {
+      jwt.verify.mockReturnValue({
+        sub: 'org-1',
+        type: 'account-deletion',
+        amountUSD: 50,
+        phoneNumber: '243812345678',
+        operator: 'VODACOM_MPESA_COD',
+      });
+      await expect(
+        service.verifyPayout('org-1', '123456', 'tok'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+      expect(provider.initPayout).not.toHaveBeenCalled();
+    });
+
+    it('refuse un token dont le sub ne correspond pas à userId (aucun mouvement d\'argent)', async () => {
+      jwt.verify.mockReturnValue({
+        sub: 'someone-else',
+        type: 'payout',
+        amountUSD: 50,
+        phoneNumber: '243812345678',
+        operator: 'VODACOM_MPESA_COD',
+      });
+      await expect(
+        service.verifyPayout('org-1', '123456', 'tok'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+      expect(provider.initPayout).not.toHaveBeenCalled();
+    });
   });
 
   describe('resolvePayout', () => {
