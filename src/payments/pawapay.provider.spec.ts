@@ -371,6 +371,137 @@ describe('PawaPayProvider.verifyWebhookSignature', () => {
   });
 });
 
+describe('PawaPayProvider.initPayout', () => {
+  let provider: PawaPayProvider;
+  let prisma: any;
+  let fetchMock: jest.Mock;
+
+  const basePayout = {
+    payoutRef: 'ref-1',
+    amount: 45000,
+    currency: 'CDF' as const,
+    operator: 'VODACOM_MPESA_COD',
+    phoneNumber: '243812345678',
+  };
+
+  beforeEach(() => {
+    const config = {
+      get: jest.fn((key: string) =>
+        ({
+          PAWAPAY_BASE_URL: 'https://api.sandbox.pawapay.io',
+          PAWAPAY_API_TOKEN: 'sandbox-token',
+        })[key],
+      ),
+    };
+    prisma = { paymentProviderLog: { create: jest.fn().mockResolvedValue({}) } };
+    provider = new PawaPayProvider(config as any, prisma);
+    fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+  });
+
+  it('POST /v2/payouts (CDF entier) → ACCEPTED → status PENDING normalisé', async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse({ payoutId: 'ref-1', status: 'ACCEPTED' }),
+    );
+
+    const res = await provider.initPayout(basePayout);
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.sandbox.pawapay.io/v2/payouts');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers.Authorization).toBe('Bearer sandbox-token');
+
+    const body = JSON.parse(opts.body);
+    expect(body.payoutId).toBe('ref-1');
+    expect(body.amount).toBe('45000'); // CDF entier, string
+    expect(body.recipient.type).toBe('MMO');
+    expect(body.recipient.accountDetails.phoneNumber).toBe('243812345678');
+    expect(body.recipient.accountDetails.provider).toBe('VODACOM_MPESA_COD');
+
+    expect(res.status).toBe('PENDING');
+    expect(res.payoutRef).toBe('ref-1');
+    expect(res.providerPayoutId).toBe('ref-1');
+
+    expect(prisma.paymentProviderLog.create).toHaveBeenCalledTimes(1);
+    const logged = prisma.paymentProviderLog.create.mock.calls[0][0].data;
+    expect(logged.paymentRef).toBe('ref-1');
+    expect(logged.direction).toBe('PAYOUT_INIT');
+    expect(logged.status).toBe('ACCEPTED');
+  });
+
+  it('REJECTED → status DECLINED', async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse({ payoutId: 'ref-2', status: 'REJECTED' }),
+    );
+
+    const res = await provider.initPayout({ ...basePayout, payoutRef: 'ref-2', amount: 1000 });
+    expect(res.status).toBe('DECLINED');
+  });
+
+  it('HTTP non-2xx → lève une erreur', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ message: 'nope' }, false, 500));
+    await expect(provider.initPayout(basePayout)).rejects.toThrow();
+  });
+});
+
+describe('PawaPayProvider.checkPayoutStatus', () => {
+  let provider: PawaPayProvider;
+  let prisma: any;
+  let fetchMock: jest.Mock;
+  const ref = 'ref-1';
+
+  beforeEach(() => {
+    const config = {
+      get: jest.fn((key: string) =>
+        ({
+          PAWAPAY_BASE_URL: 'https://api.sandbox.pawapay.io',
+          PAWAPAY_API_TOKEN: 'sandbox-token',
+        })[key],
+      ),
+    };
+    prisma = { paymentProviderLog: { create: jest.fn().mockResolvedValue({}) } };
+    provider = new PawaPayProvider(config as any, prisma);
+    fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+  });
+
+  it('GET /v2/payouts/{id} FOUND/COMPLETED → APPROVED + montant', async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse({
+        status: 'FOUND',
+        data: { payoutId: ref, status: 'COMPLETED', amount: '45000', currency: 'CDF' },
+      }),
+    );
+
+    const res = await provider.checkPayoutStatus(ref);
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe(`https://api.sandbox.pawapay.io/v2/payouts/${ref}`);
+    expect(opts.method).toBe('GET');
+    expect(opts.headers.Authorization).toBe('Bearer sandbox-token');
+
+    expect(res.status).toBe('APPROVED');
+    expect(res.amount).toBe(45000);
+    expect(res.currency).toBe('CDF');
+
+    expect(prisma.paymentProviderLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.paymentProviderLog.create.mock.calls[0][0].data.direction).toBe(
+      'PAYOUT_CHECK',
+    );
+  });
+
+  it('NOT_FOUND → PENDING (payout pas encore connu)', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ status: 'NOT_FOUND' }));
+    const res = await provider.checkPayoutStatus(ref);
+    expect(res.status).toBe('PENDING');
+  });
+
+  it('HTTP non-2xx → lève une erreur', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ message: 'boom' }, false, 500));
+    await expect(provider.checkPayoutStatus(ref)).rejects.toThrow();
+  });
+});
+
 describe('PawaPayProvider.getOperators', () => {
   let provider: PawaPayProvider;
   let prisma: any;

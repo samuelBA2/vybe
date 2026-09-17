@@ -8,6 +8,8 @@ import {
   CheckStatusResult,
   InitPaymentInput,
   InitPaymentResult,
+  InitPayoutInput,
+  InitPayoutResult,
   PaymentProvider,
   ProviderCurrency,
   ProviderOperator,
@@ -31,6 +33,23 @@ interface PawaPayStatusResponse {
     amount?: string;
     currency?: string;
     providerTransactionId?: string;
+  };
+}
+
+// Forme (partielle) de la réponse PawaPay à POST /v2/payouts.
+interface PawaPayPayoutResponse {
+  payoutId?: string;
+  status?: string; // ACCEPTED | REJECTED | DUPLICATE_IGNORED
+  failureReason?: { failureCode?: string; failureMessage?: string };
+}
+// Forme (partielle) de la réponse à GET /v2/payouts/{id} (enveloppée).
+interface PawaPayPayoutStatusResponse {
+  status?: string; // FOUND | NOT_FOUND
+  data?: {
+    payoutId?: string;
+    status?: string; // COMPLETED | FAILED | PROCESSING
+    amount?: string;
+    currency?: string;
   };
 }
 
@@ -282,6 +301,110 @@ export class PawaPayProvider implements PaymentProvider {
       });
     }
     return operators;
+  }
+
+  // Décaissement Mobile Money. Doc : POST {BASE_URL}/v2/payouts (miroir des dépôts,
+  // recipient au lieu de payer). Idempotent par payoutId. ACCEPTED/DUPLICATE_IGNORED
+  // → PENDING (résolution async) ; REJECTED → DECLINED.
+  async initPayout(input: InitPayoutInput): Promise<InitPayoutResult> {
+    const payoutId = input.payoutRef;
+    const body: Record<string, unknown> = {
+      payoutId,
+      recipient: {
+        type: 'MMO',
+        accountDetails: {
+          phoneNumber: input.phoneNumber,
+          provider: input.operator,
+        },
+      },
+      amount: this.formatAmount(input.amount, input.currency),
+      currency: input.currency,
+    };
+    const customerMessage = this.sanitizeMessage(input.description);
+    if (customerMessage) body.customerMessage = customerMessage;
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/v2/payouts`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      this.logger.error(`initPayout fetch a échoué: ${String(err)}`);
+      throw new Error('PawaPay injoignable (initPayout).');
+    }
+
+    let data: PawaPayPayoutResponse | undefined;
+    try {
+      data = (await res.json()) as PawaPayPayoutResponse;
+    } catch {
+      data = undefined;
+    }
+    await this.log(
+      payoutId,
+      'PAYOUT_INIT',
+      body,
+      data,
+      data?.status ?? String(res.status),
+    );
+
+    if (!res.ok) throw new Error(`PawaPay initPayout: HTTP ${res.status}`);
+
+    const status = data?.status;
+    if (status === 'ACCEPTED' || status === 'DUPLICATE_IGNORED') {
+      return {
+        payoutRef: data?.payoutId ?? payoutId,
+        providerPayoutId: data?.payoutId,
+        status: 'PENDING',
+      };
+    }
+    // REJECTED / inattendu : init refusée.
+    return { payoutRef: payoutId, status: 'DECLINED' };
+  }
+
+  // Re-vérifie un payout côté serveur = SOURCE DE VÉRITÉ. GET {BASE_URL}/v2/payouts/{id}
+  // (enveloppé FOUND/NOT_FOUND). COMPLETED→APPROVED, FAILED→DECLINED, sinon PENDING.
+  async checkPayoutStatus(payoutRef: string): Promise<CheckStatusResult> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/v2/payouts/${payoutRef}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+    } catch (err) {
+      this.logger.error(`checkPayoutStatus fetch a échoué: ${String(err)}`);
+      throw new Error('PawaPay injoignable (checkPayoutStatus).');
+    }
+
+    let body: PawaPayPayoutStatusResponse | undefined;
+    try {
+      body = (await res.json()) as PawaPayPayoutStatusResponse;
+    } catch {
+      body = undefined;
+    }
+    await this.log(
+      payoutRef,
+      'PAYOUT_CHECK',
+      { payoutRef },
+      body,
+      body?.status,
+    );
+
+    if (!res.ok)
+      throw new Error(`PawaPay checkPayoutStatus: HTTP ${res.status}`);
+
+    const payout = body?.data;
+    if (body?.status !== 'FOUND' || !payout) return { status: 'PENDING' };
+
+    const status = this.mapDepositStatus(payout.status); // même mapping COMPLETED/FAILED
+    const amount =
+      payout.amount !== undefined ? Number(payout.amount) : undefined;
+    const currency = payout.currency as ProviderCurrency | undefined;
+    return { status, amount, currency };
   }
 
   // Vérifie l'authenticité d'un callback PawaPay (RFC-9421, ecdsa-p256-sha256).

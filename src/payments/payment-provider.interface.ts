@@ -41,6 +41,25 @@ export interface InitPaymentResult {
   paymentUrl?: string;
 }
 
+// Entrée d'un payout (décaissement vers un destinataire Mobile Money). `amount`
+// exprimé dans `currency` (entier si CDF). `phoneNumber` = numéro destinataire.
+export interface InitPayoutInput {
+  payoutRef: string;
+  amount: number;
+  currency: ProviderCurrency;
+  operator: string;
+  phoneNumber: string;
+  description?: string;
+}
+
+export interface InitPayoutResult {
+  payoutRef: string;
+  providerPayoutId?: string;
+  // Statut immédiat renvoyé par le fournisseur à l'initiation (ACCEPTED → PENDING
+  // côté nous ; DECLINED → échec d'init).
+  status: ProviderStatus;
+}
+
 export interface CheckStatusResult {
   status: ProviderStatus;
   // Montant confirmé par le fournisseur, si celui-ci l'expose (sert au contrôle
@@ -95,6 +114,13 @@ export interface PaymentProvider {
 
   // Liste les opérateurs Mobile Money disponibles pour le pays cible (dépôts).
   getOperators(): Promise<ProviderOperator[]>;
+
+  // Initie un décaissement vers un destinataire Mobile Money. ACCEPTED → en cours
+  // (résolution async) ; DECLINED → init refusée (le service re-crédite + FAILED).
+  initPayout(input: InitPayoutInput): Promise<InitPayoutResult>;
+
+  // Re-vérifie le statut d'un payout côté serveur = source de vérité.
+  checkPayoutStatus(payoutRef: string): Promise<CheckStatusResult>;
 }
 
 // Token d'injection Nest. L'implémentation concrète est liée à ce token en Task 3b :
