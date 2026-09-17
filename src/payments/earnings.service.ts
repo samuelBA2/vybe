@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { PLATFORM_FEE_RATE, USD_TO_CDF_RATE } from 'src/common/constants';
+import {
+  PAYOUT_MATURATION_DAYS,
+  PLATFORM_FEE_RATE,
+  USD_TO_CDF_RATE,
+} from 'src/common/constants';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -12,7 +16,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 export class EarningsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Solde disponible (= net 85 % cumulé, ce que l'organisateur pourra retirer au
+  // Solde disponible (= net 80 % cumulé, ce que l'organisateur pourra retirer au
   // Lot 2) + ventilation brut / commission / net. Scope strict à l'utilisateur.
   async getSummary(userId: string) {
     // Solde = Σ des écritures ORGANIZER de l'utilisateur (source de vérité).
@@ -34,6 +38,7 @@ export class EarningsService {
     const grossSoldUSD = round2(sold._sum.totalAmount ?? 0);
     const platformFeeUSD = round2(sold._sum.platformFee ?? 0);
     const netEarnedUSD = round2(sold._sum.organizerAmount ?? 0);
+    const withdrawable = await this.getWithdrawable(userId);
 
     return {
       availableBalanceUSD,
@@ -42,6 +47,44 @@ export class EarningsService {
       platformFeeUSD,
       netEarnedUSD,
       rate: USD_TO_CDF_RATE,
+      ...withdrawable,
+    };
+  }
+
+  // Solde RETIRABLE (≠ solde total créance). Seules les ventes maturées comptent
+  // côté crédit ; les payouts (débits + reversals) comptent immédiatement. Un
+  // débit est donc toujours adossé à du crédit maturé. Jamais < 0.
+  async getWithdrawable(
+    userId: string,
+  ): Promise<{ withdrawableUSD: number; withdrawableCDF: number }> {
+    const cutoff = new Date(
+      Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const maturedCredits = await this.prisma.ledgerEntry.aggregate({
+      _sum: { amount: true },
+      where: {
+        userId,
+        account: 'ORGANIZER',
+        type: 'SALE_ORGANIZER',
+        createdAt: { lte: cutoff },
+      },
+    });
+
+    const payouts = await this.prisma.ledgerEntry.aggregate({
+      _sum: { amount: true },
+      where: {
+        userId,
+        account: 'ORGANIZER',
+        type: { in: ['PAYOUT_ORGANIZER', 'PAYOUT_REVERSAL'] },
+      },
+    });
+
+    const raw = (maturedCredits._sum.amount ?? 0) + (payouts._sum.amount ?? 0);
+    const withdrawableUSD = Math.max(0, round2(raw));
+    return {
+      withdrawableUSD,
+      withdrawableCDF: Math.round(withdrawableUSD * USD_TO_CDF_RATE),
     };
   }
 

@@ -1,6 +1,10 @@
 import { EarningsService } from './earnings.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { PLATFORM_FEE_RATE, USD_TO_CDF_RATE } from 'src/common/constants';
+import {
+  PAYOUT_MATURATION_DAYS,
+  PLATFORM_FEE_RATE,
+  USD_TO_CDF_RATE,
+} from 'src/common/constants';
 
 describe('EarningsService', () => {
   let service: EarningsService;
@@ -13,7 +17,18 @@ describe('EarningsService', () => {
   beforeEach(() => {
     prisma = {
       ledgerEntry: {
-        aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
+        aggregate: jest.fn().mockImplementation((args: any) => {
+          // Crédits de vente maturés (SALE_ORGANIZER + filtre createdAt).
+          if (args?.where?.type === 'SALE_ORGANIZER') {
+            return Promise.resolve({ _sum: { amount: 100 } });
+          }
+          // Débits/reversals de payout (PAYOUT_ORGANIZER + PAYOUT_REVERSAL).
+          if (args?.where?.type?.in) {
+            return Promise.resolve({ _sum: { amount: -30 } });
+          }
+          // getSummary : solde total ORGANIZER.
+          return Promise.resolve({ _sum: { amount: null } });
+        }),
         findMany: jest.fn().mockResolvedValue([]),
       },
       order: {
@@ -49,6 +64,8 @@ describe('EarningsService', () => {
         },
       }));
 
+      // Le mock d'aggregate ci-dessus renvoie 170 sur tous les appels (y compris
+      // ceux de getWithdrawable) : retirable = 170 (maturé) + 170 (payouts) = 340.
       expect(res).toEqual({
         availableBalanceUSD: 170,
         availableBalanceCDF: Math.round(170 * USD_TO_CDF_RATE),
@@ -56,11 +73,16 @@ describe('EarningsService', () => {
         platformFeeUSD: 30,
         netEarnedUSD: 170,
         rate: USD_TO_CDF_RATE,
+        withdrawableUSD: 340,
+        withdrawableCDF: Math.round(340 * USD_TO_CDF_RATE),
       });
     });
 
     it('aucune vente → tout à zéro (agrégats nuls)', async () => {
       const res = await service.getSummary('org-1');
+      // Solde total ORGANIZER nul, mais le mock par défaut du beforeEach
+      // renvoie tout de même des crédits maturés (100) et des payouts (-30)
+      // pour les appels dédiés de getWithdrawable → retirable = 70.
       expect(res).toEqual({
         availableBalanceUSD: 0,
         availableBalanceCDF: 0,
@@ -68,6 +90,8 @@ describe('EarningsService', () => {
         platformFeeUSD: 0,
         netEarnedUSD: 0,
         rate: USD_TO_CDF_RATE,
+        withdrawableUSD: 70,
+        withdrawableCDF: Math.round(70 * USD_TO_CDF_RATE),
       });
     });
   });
@@ -198,5 +222,57 @@ describe('EarningsService', () => {
       expect(res.events).toEqual([]);
       expect(prisma.order.groupBy).not.toHaveBeenCalled();
     });
+  });
+
+  describe('getWithdrawable', () => {
+    it('retirable = crédits maturés − payouts nets, scope user, CDF au taux', async () => {
+      const before = Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
+      const res = await service.getWithdrawable('org-1');
+      const after = Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
+
+      // Crédits maturés : SALE_ORGANIZER, scope user, createdAt ≤ cutoff.
+      const creditCall = prisma.ledgerEntry.aggregate.mock.calls.find(
+        (c: any[]) => c[0]?.where?.type === 'SALE_ORGANIZER',
+      );
+      expect(creditCall[0].where.userId).toBe('org-1');
+      expect(creditCall[0].where.account).toBe('ORGANIZER');
+      expect(creditCall[0].where.createdAt.lte).toBeInstanceOf(Date);
+      // Cutoff = maintenant − PAYOUT_MATURATION_DAYS jours (encadré par before/after).
+      const cutoffMs = creditCall[0].where.createdAt.lte.getTime();
+      expect(cutoffMs).toBeGreaterThanOrEqual(before);
+      expect(cutoffMs).toBeLessThanOrEqual(after);
+
+      // Payouts : PAYOUT_ORGANIZER + PAYOUT_REVERSAL (pas de filtre maturation).
+      const payoutCall = prisma.ledgerEntry.aggregate.mock.calls.find(
+        (c: any[]) => c[0]?.where?.type?.in,
+      );
+      expect(payoutCall[0].where.type.in).toEqual([
+        'PAYOUT_ORGANIZER',
+        'PAYOUT_REVERSAL',
+      ]);
+      expect(payoutCall[0].where.userId).toBe('org-1');
+
+      // 100 (maturé) + (−30 net payouts) = 70.
+      expect(res.withdrawableUSD).toBe(70);
+      expect(res.withdrawableCDF).toBe(Math.round(70 * USD_TO_CDF_RATE));
+    });
+
+    it('ne descend jamais sous 0', async () => {
+      prisma.ledgerEntry.aggregate.mockImplementation((args: any) => {
+        if (args?.where?.type === 'SALE_ORGANIZER')
+          return Promise.resolve({ _sum: { amount: 10 } });
+        if (args?.where?.type?.in)
+          return Promise.resolve({ _sum: { amount: -25 } });
+        return Promise.resolve({ _sum: { amount: null } });
+      });
+      const res = await service.getWithdrawable('org-1');
+      expect(res.withdrawableUSD).toBe(0);
+    });
+  });
+
+  it('getSummary expose aussi le solde retirable', async () => {
+    const res = await service.getSummary('org-1');
+    expect(res).toHaveProperty('withdrawableUSD');
+    expect(res).toHaveProperty('withdrawableCDF');
   });
 });
