@@ -12,6 +12,7 @@ import { EarningsService } from './earnings.service';
 import { PayoutsController } from './payouts.controller';
 import { PayoutsService } from './payouts.service';
 import { PayoutsCleanupService } from './payouts.cleanup';
+import { OtpModule } from 'src/otp/otp.module';
 
 // Module paiement. Le fournisseur concret (PawaPayProvider) est lié au token
 // d'injection PAYMENT_PROVIDER : tout le flux (createOrder, webhook, reaper,
@@ -26,7 +27,7 @@ import { PayoutsCleanupService } from './payouts.cleanup';
 // AuthModule fournit JwtService pour JwtAuthGuard/RolesGuard (EarningsController,
 // PayoutsController). À venir : enregistrement dans AppModule (Task 10 finale).
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, OtpModule],
   controllers: [PaymentsController, EarningsController, PayoutsController],
   providers: [
     { provide: PAYMENT_PROVIDER, useClass: PawaPayProvider },
