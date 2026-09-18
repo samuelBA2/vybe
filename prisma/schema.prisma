@@ -298,7 +298,7 @@ enum Currency {
 // Type de compte comptable virtuel d'une écriture de ledger.
 enum LedgerAccount {
   ORGANIZER // dette de Vybe envers l'organisateur (IOU) = solde retirable (Lot 2)
-  PLATFORM  // revenu de Vybe (commission 15 %)
+  PLATFORM  // revenu de Vybe (commission 20 %)
 }
 
 // Nature de l'écriture (le signe du montant confirme crédit/débit).
@@ -313,7 +313,7 @@ enum LedgerEntryType {
 // Écriture de ledger = SOURCE DE VÉRITÉ des soldes. Écrite dans la MÊME transaction que la
 // génération des billets au passage PAID. Le solde organisateur = SUM(amount) WHERE
 // userId=X AND account=ORGANIZER. L'argent réel (100 %) est chez le fournisseur sur le
-// compte marchand Vybe ; le split 85/15 est VIRTUEL (comptable), le ledger ne détient pas d'argent.
+// compte marchand Vybe ; le split 80/20 est VIRTUEL (comptable), le ledger ne détient pas d'argent.
 model LedgerEntry {
   id        String          @id @default(uuid())
   account   LedgerAccount

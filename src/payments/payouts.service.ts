@@ -20,13 +20,8 @@ import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type { PaymentProvider } from './payment-provider.interface';
 import { EarningsService } from './earnings.service';
+import type { RequestPayoutDto } from './dto/request-payout.dto';
 
-interface RequestPayoutDto {
-  amountUSD?: number;
-  all?: boolean;
-  phoneNumber: string;
-  operator: string;
-}
 type PayoutOutcome = 'PENDING' | 'COMPLETED' | 'FAILED' | 'REVIEW';
 
 @Injectable()
@@ -151,6 +146,10 @@ export class PayoutsService {
         'SELECT pg_advisory_xact_lock(hashtext($1))',
         userId,
       );
+      // Lecture volontairement sur this.prisma (pas tx) : le verrou advisory par
+      // user ci-dessus sérialise les vérifications concurrentes, donc un 2e appelant
+      // ne lit ce solde qu'après le COMMIT de la transaction du 1er ; en READ
+      // COMMITTED il voit alors le débit déjà écrit — pas de sur-retrait possible.
       const { withdrawableUSD } = await this.earnings.getWithdrawable(userId);
       if (amountUSD > withdrawableUSD) {
         throw new BadRequestException('Solde retirable insuffisant.');
@@ -238,6 +237,10 @@ export class PayoutsService {
     const check = await this.payment.checkPayoutStatus(payoutRef);
 
     if (check.status === 'APPROVED' || check.status === 'ACCEPTED') {
+      // Déviation acceptée par rapport au chemin dépôt (qui route une divergence de
+      // montant vers REVIEW) : ici le montant du payout est fixé côté serveur
+      // (amountCDF calculé par nos soins, pas saisi par l'acheteur), donc il n'y a
+      // pas de divergence à arbitrer — APPROVED/ACCEPTED implique toujours COMPLETED.
       await this.prisma.payout.update({
         where: { id: payout.id },
         data: { status: 'COMPLETED', resolvedAt: new Date() },
