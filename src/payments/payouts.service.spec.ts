@@ -85,13 +85,31 @@ describe('PayoutsService', () => {
     });
 
     it('CDF : montant arrondi à l\'entier, retrait dans la devise choisie', async () => {
-      // NB : bornes PAYOUT_MIN/MAX_AMOUNT héritées (pensées USD) → montant CDF
-      // gardé sous le plafond filet (2000) pour ce test de rounding. Le vrai
-      // min/max par devise reste un point de câblage sandbox (cf. rapport).
+      // Bornes CDF (payoutBounds) = bornes USD × taux figé = [11250, 4500000].
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 250000 });
-      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 1500.7, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 150000.7, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
       expect(earnings.getWithdrawable).toHaveBeenCalledWith('org-1', 'CDF');
-      expect(res).toEqual({ tempToken: 'temp.jwt', currency: 'CDF', amount: 1501 });
+      expect(res).toEqual({ tempToken: 'temp.jwt', currency: 'CDF', amount: 150001 });
+    });
+
+    it('CDF : montant dans les bornes CDF (250 000, ∈ [11250, 4500000]) n\'est PAS rejeté pour cause de borne', async () => {
+      earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 300000 });
+      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 250000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      expect(res.amount).toBe(250000);
+    });
+
+    it('CDF : refuse un montant > borne max CDF (5 000 000), message avec la devise', async () => {
+      earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 10000000 });
+      await expect(
+        service.requestPayout('org-1', { currency: 'CDF', amount: 5000000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+      ).rejects.toThrow('CDF');
+    });
+
+    it('CDF : refuse un montant < borne min CDF (10 000)', async () => {
+      earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 300000 });
+      await expect(
+        service.requestPayout('org-1', { currency: 'CDF', amount: 10000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

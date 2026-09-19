@@ -12,8 +12,8 @@ import { randomUUID } from 'crypto';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { OtpService } from 'src/otp/otp.service';
-import { PAYOUT_MAX_AMOUNT, PAYOUT_MIN_AMOUNT } from 'src/common/constants';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
+import { payoutBounds } from 'src/common/money';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type { PaymentProvider } from './payment-provider.interface';
 import { EarningsService } from './earnings.service';
@@ -67,9 +67,13 @@ export class PayoutsService {
         ? Math.round(dto.amount ?? 0)
         : round2(dto.amount ?? 0);
 
-    if (amount < PAYOUT_MIN_AMOUNT) {
+    // Filet défensif PAR DEVISE (taux figé appliqué UNIQUEMENT ici, jamais dans
+    // le chemin de l'argent réel) : le vrai min/max par opérateur/devise via
+    // l'active-conf reste le câblage sandbox.
+    const { min, max } = payoutBounds(currency);
+    if (amount < min) {
       throw new BadRequestException(
-        `Le montant minimum de retrait est de ${PAYOUT_MIN_AMOUNT}.`,
+        `Le montant minimum de retrait est de ${min} ${currency}.`,
       );
     }
     if (amount > withdrawable) {
@@ -77,11 +81,9 @@ export class PayoutsService {
         'Montant supérieur à votre solde retirable disponible.',
       );
     }
-    // Filet défensif hérité (bornes pensées USD) : le vrai min/max PAR DEVISE
-    // via l'active-conf de l'opérateur est appliqué au câblage sandbox.
-    if (amount > PAYOUT_MAX_AMOUNT) {
+    if (amount > max) {
       throw new BadRequestException(
-        `Le montant maximum par retrait est de ${PAYOUT_MAX_AMOUNT}.`,
+        `Le montant maximum par retrait est de ${max} ${currency}.`,
       );
     }
 
