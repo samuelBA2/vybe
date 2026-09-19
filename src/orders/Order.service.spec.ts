@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { OrderService } from './Order.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { PLATFORM_FEE_RATE, USD_TO_CDF_RATE } from 'src/common/constants';
+import { PLATFORM_FEE_RATE } from 'src/common/constants';
 import { PaymentProvider } from 'src/payments/payment-provider.interface';
 
 describe('OrderService', () => {
@@ -28,6 +28,7 @@ describe('OrderService', () => {
     initPayment: jest.Mock;
     checkStatus: jest.Mock;
     verifyWebhookSignature: jest.Mock;
+    getOperators: jest.Mock;
   };
 
   beforeEach(() => {
@@ -54,6 +55,11 @@ describe('OrderService', () => {
       initPayment: jest.fn().mockResolvedValue({ paymentRef: 'provider-ref' }),
       checkStatus: jest.fn(),
       verifyWebhookSignature: jest.fn(),
+      // Opérateur disponible dans les deux devises par défaut (les tests d'invalidité
+      // de devise/opérateur surchargent ce mock).
+      getOperators: jest.fn().mockResolvedValue([
+        { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, currencies: ['USD', 'CDF'] },
+      ]),
     };
     service = new OrderService(
       prisma as unknown as PrismaService,
@@ -61,7 +67,8 @@ describe('OrderService', () => {
     );
   });
 
-  // Catégorie valide par défaut : PUBLISHED, deadline future, stock large.
+  // Catégorie valide par défaut : PUBLISHED, deadline future, stock large,
+  // événement facturé en USD (surcharger event.priceCurrency pour un cas CDF).
   const category = (over: Partial<any> = {}) => ({
     id: 'cat-1',
     name: 'Standard',
@@ -73,17 +80,18 @@ describe('OrderService', () => {
       status: 'PUBLISHED',
       purchaseDeadline: new Date(Date.now() + 3_600_000), // +1h
       endDate: new Date(Date.now() + 7_200_000), // +2h
+      priceCurrency: 'USD',
     },
     ...over,
   });
 
-  // Panier à une seule ligne par défaut (currency + champs push PawaPay).
+  // Panier à une seule ligne par défaut (champs push PawaPay). La devise n'est
+  // plus fournie par le client : elle vient de l'événement (category.event.priceCurrency).
   const dto = (
     items: any[] = [{ ticketCategoryId: 'cat-1', quantity: 2 }],
     over: Partial<any> = {},
   ) => ({
     items,
-    currency: 'USD',
     operator: 'VODACOM_MPESA_COD',
     phoneNumber: '243810000000',
     ...over,
@@ -227,9 +235,9 @@ describe('OrderService', () => {
     });
   });
 
-  it('succès (CDF) : chargedAmount = round(USD × taux) entier, total poussé = Σ', async () => {
-    const catA = category({ id: 'cat-1', name: 'Standard', price: 100 });
-    const catB = category({ id: 'cat-2', name: 'VIP', price: 50 });
+  it("succès (CDF) : devise vient de l'event, chargedAmount = totalAmount SANS conversion, split entier", async () => {
+    const catA = category({ id: 'cat-1', name: 'Standard', price: 100, event: { ...category().event, priceCurrency: 'CDF' } });
+    const catB = category({ id: 'cat-2', name: 'VIP', price: 50, event: { ...category().event, priceCurrency: 'CDF' } });
     prisma.ticketCategory.findMany.mockResolvedValue([catA, catB]);
     tx.order.create
       .mockResolvedValueOnce({ id: 'order-1' })
@@ -238,26 +246,89 @@ describe('OrderService', () => {
     const res = await service.createOrder('user-1', dto([
       { ticketCategoryId: 'cat-1', quantity: 2 },
       { ticketCategoryId: 'cat-2', quantity: 1 },
-    ], { currency: 'CDF' }));
+    ]));
 
-    const cdf200 = Math.round(200 * USD_TO_CDF_RATE);
-    const cdf50 = Math.round(50 * USD_TO_CDF_RATE);
-
-    // Montants USD inchangés (base comptable), chargedAmount en CDF entier.
+    // Plus de conversion : chargedAmount == totalAmount, dans la devise event.
+    // cat-1 : 2×100 = 200 (fee 20% entier = 40, organizer = 160).
     expect(tx.order.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      data: expect.objectContaining({ totalAmount: 200, currency: 'CDF', chargedAmount: cdf200 }),
+      data: expect.objectContaining({ totalAmount: 200, currency: 'CDF', platformFee: 40, organizerAmount: 160, chargedAmount: 200 }),
     }));
+    // cat-2 : 1×50 = 50 (fee 10, organizer 40).
     expect(tx.order.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      data: expect.objectContaining({ totalAmount: 50, currency: 'CDF', chargedAmount: cdf50 }),
+      data: expect.objectContaining({ totalAmount: 50, currency: 'CDF', platformFee: 10, organizerAmount: 40, chargedAmount: 50 }),
     }));
 
     expect(provider.initPayment).toHaveBeenCalledWith(expect.objectContaining({
-      amount: cdf200 + cdf50,
+      amount: 250,
       currency: 'CDF',
     }));
     expect(Number.isInteger((provider.initPayment.mock.calls[0][0] as any).amount)).toBe(true);
-    expect(res.chargedAmount).toBe(cdf200 + cdf50);
+    expect(res.chargedAmount).toBe(250);
     expect(res.currency).toBe('CDF');
+  });
+
+  it('event CDF, prix 5000 qty 1 → charged 5000, fee 1000, organizer 4000 (taux 20%)', async () => {
+    const cat = category({ id: 'cat-1', name: 'Standard', price: 5000, event: { ...category().event, priceCurrency: 'CDF' } });
+    prisma.ticketCategory.findMany.mockResolvedValue([cat]);
+
+    await service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 1 }]));
+
+    const orderData = tx.order.create.mock.calls[0][0].data;
+    expect(orderData.currency).toBe('CDF');
+    expect(orderData.chargedAmount).toBe(5000);
+    expect(orderData.platformFee).toBe(1000);
+    expect(orderData.organizerAmount).toBe(4000);
+    expect(provider.initPayment).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'CDF' }),
+    );
+  });
+
+  it('panier multi-events de devises différentes → 400, pas de transaction ni initPayment', async () => {
+    const catUsd = category({ id: 'cat-1', name: 'Standard', event: { ...category().event, priceCurrency: 'USD' } });
+    const catCdf = category({ id: 'cat-2', name: 'VIP', event: { ...category().event, priceCurrency: 'CDF' } });
+    prisma.ticketCategory.findMany.mockResolvedValue([catUsd, catCdf]);
+
+    await expect(
+      service.createOrder('user-1', dto([
+        { ticketCategoryId: 'cat-1', quantity: 1 },
+        { ticketCategoryId: 'cat-2', quantity: 1 },
+      ])),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provider.initPayment).not.toHaveBeenCalled();
+  });
+
+  it('opérateur inconnu → 400, pas de réservation de stock ni initPayment', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+
+    await expect(
+      service.createOrder('user-1', dto(undefined, { operator: 'INCONNU' })),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provider.initPayment).not.toHaveBeenCalled();
+  });
+
+  it("opérateur ne supportant pas la devise de l'event → 400, pas de réservation ni initPayment", async () => {
+    provider.getOperators.mockResolvedValue([
+      { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, currencies: ['USD'] },
+    ]);
+    prisma.ticketCategory.findMany.mockResolvedValue([
+      category({ event: { ...category().event, priceCurrency: 'CDF' } }),
+    ]);
+
+    await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provider.initPayment).not.toHaveBeenCalled();
+  });
+
+  it('opérateur non disponible (available:false) → 400', async () => {
+    provider.getOperators.mockResolvedValue([
+      { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: false, currencies: ['USD', 'CDF'] },
+    ]);
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+
+    await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('échec init paiement → commandes FAILED + stock relâché + BadGatewayException', async () => {

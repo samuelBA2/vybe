@@ -1,19 +1,13 @@
 import { Injectable, Inject, NotFoundException, ForbiddenException, BadRequestException, ConflictException, BadGatewayException } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { PrismaService } from "src/prisma/prisma.service";
-import { PLATFORM_FEE_RATE, USD_TO_CDF_RATE } from "src/common/constants";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
 import { PAYMENT_PROVIDER } from "src/payments/payment-provider.interface";
-import type { PaymentProvider, ProviderCurrency } from "src/payments/payment-provider.interface";
+import type { PaymentProvider } from "src/payments/payment-provider.interface";
+import { splitAmount } from "src/common/money";
 
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-
-// Montant réellement débité pour un montant comptable en USD, dans la devise
-// choisie par l'acheteur. CDF : entier (certains opérateurs Mobile Money refusent
-// les décimales) ; USD : arrondi 2 décimales.
-const toCharged = (usd: number, currency: ProviderCurrency) =>
-    currency === 'CDF' ? Math.round(usd * USD_TO_CDF_RATE) : round2(usd);
 
 @Injectable()
 export class OrderService {
@@ -24,7 +18,6 @@ export class OrderService {
     ){}
     async createOrder(userId: string, dto: CreateOrderDto){
         const items = dto.items;
-        const currency = dto.currency;
 
         // Le panier agrège déjà par catégorie : un doublon est une anomalie client.
         const ids = items.map((i) => i.ticketCategoryId);
@@ -49,17 +42,34 @@ export class OrderService {
             if (item.quantity > category.maxPerOrder) throw new ForbiddenException(`Maximum ${category.maxPerOrder} billets par commande.`);
         }
 
-        // Montants calculés une fois : USD = base comptable, chargedAmount = part de
-        // cette ligne dans le montant réellement débité (currency).
+        // Devise = celle de l'événement (plus de choix acheteur). Un panier ne peut
+        // mélanger des catégories d'événements facturés dans des devises différentes.
+        const currency = categories[0].event.priceCurrency;
+        if (categories.some((c) => c.event.priceCurrency !== currency)) {
+            throw new BadRequestException('Un panier ne peut mélanger des événements de devises différentes.');
+        }
+
+        // Montants calculés une fois, directement dans la devise event. Plus de
+        // conversion : chargedAmount == totalAmount (ce que l'acheteur voit à
+        // l'achat = ce qui est réellement débité).
         const lines = items.map((item) => {
             const category = byId.get(item.ticketCategoryId)!;
             const unitPrice = category.price;
             const totalAmount = round2(item.quantity * unitPrice);
-            const platformFee = round2(totalAmount * PLATFORM_FEE_RATE);
-            const organizerAmount = round2(totalAmount - platformFee);
-            const chargedAmount = toCharged(totalAmount, currency);
+            const { platformFee, organizerAmount } = splitAmount(totalAmount, currency);
+            const chargedAmount = totalAmount;
             return { item, category, unitPrice, totalAmount, platformFee, organizerAmount, chargedAmount };
         });
+
+        // Garde opérateur/devise : rejet 4xx clair AVANT de réserver du moindre
+        // stock si l'opérateur choisi n'existe pas / n'est pas disponible / ne gère
+        // pas la devise de l'événement (supprime le cas le plus fréquent d'échec
+        // fournisseur, ex. AMOUNT_OUT_OF_BOUNDS par incohérence de devise).
+        const operators = await this.payment.getOperators();
+        const op = operators.find((o) => o.code === dto.operator);
+        if (!op || !op.available || !op.currencies.includes(currency)) {
+            throw new BadRequestException('Opérateur indisponible pour cette devise.');
+        }
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
         const paymentRef = randomUUID();
