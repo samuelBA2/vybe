@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type {
@@ -31,6 +31,7 @@ type OrderWithEvent = {
   chargedAmount: number;
   organizerAmount: number;
   platformFee: number;
+  currency: $Enums.Currency;
   paymentStatus: string;
   ticketCategory: { event: { id: string; endDate: Date; createdById: string } };
 };
@@ -200,9 +201,9 @@ export class PaymentsService {
     }));
     await tx.ticket.createMany({ data: tickets });
 
-    // Ledger (USD = base comptable). Option A : la ligne PLATFORM porte le userId
-    // de l'organisateur (account=PLATFORM la distingue ; le revenu plateforme =
-    // SUM(account=PLATFORM), le solde organisateur = SUM(account=ORGANIZER)).
+    // Ledger (écrit dans la devise de la commande). Option A : la ligne PLATFORM
+    // porte le userId de l'organisateur (account=PLATFORM la distingue ; le revenu
+    // plateforme = SUM(account=PLATFORM), le solde organisateur = SUM(account=ORGANIZER)).
     await tx.ledgerEntry.createMany({
       data: [
         {
@@ -210,7 +211,7 @@ export class PaymentsService {
           userId: event.createdById,
           type: 'SALE_ORGANIZER',
           amount: order.organizerAmount,
-          currency: 'USD',
+          currency: order.currency,
           orderId: order.id,
           eventId: event.id,
         },
@@ -219,7 +220,7 @@ export class PaymentsService {
           userId: event.createdById,
           type: 'SALE_PLATFORM',
           amount: order.platformFee,
-          currency: 'USD',
+          currency: order.currency,
           orderId: order.id,
           eventId: event.id,
         },

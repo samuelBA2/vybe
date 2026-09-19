@@ -179,6 +179,19 @@ describe('PaymentsService.handleWebhook', () => {
     expect(res).toEqual(expect.objectContaining({ paymentRef: PAYMENT_REF, status: 'PAID' }));
   });
 
+  it('CDF : ledger écrit dans la devise de la commande (pas USD hard-codé)', async () => {
+    prisma.order.findMany.mockResolvedValue([order({ currency: 'CDF', chargedAmount: 450000, organizerAmount: 380000, platformFee: 70000 })]);
+    mockCheck('COMPLETED', '450000', 'CDF');
+    const { rawBody, headers } = webhook();
+
+    const res = await service.handleWebhook(rawBody, headers);
+
+    expect(tx.ledgerEntry.createMany).toHaveBeenCalledTimes(1);
+    const rows = tx.ledgerEntry.createMany.mock.calls[0][0].data;
+    expect(rows.every((r: any) => r.currency === 'CDF')).toBe(true);
+    expect(res).toEqual(expect.objectContaining({ paymentRef: PAYMENT_REF, status: 'PAID' }));
+  });
+
   it('2ᵉ webhook (commande déjà PAID) → no-op idempotent', async () => {
     prisma.order.findMany.mockResolvedValue([order({ paymentStatus: 'PAID' })]);
     mockCheck('COMPLETED', '200');
