@@ -343,7 +343,7 @@ model Payout {
   payoutRef        String       @unique
   userId           String
   user             User         @relation(fields: [userId], references: [id])
-  currency         Currency     // devise du retrait (= devise de l'événement source)
+  currency         Currency     @default(USD) // devise du retrait (= devise de l'événement source)
   amount           Float        // montant retiré, dans `currency` (entier si CDF)
   operator         String       // code opérateur PawaPay
   destination      String       // numéro MoMo (en clair)
