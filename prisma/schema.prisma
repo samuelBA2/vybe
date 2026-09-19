@@ -144,6 +144,7 @@ model Event {
   purchaseDeadline DateTime
   dressCode     String?
   category      EventCategory
+  priceCurrency Currency     @default(USD) // devise de tarification (choix créateur). @default = backfill DB uniquement ; le DTO l'exige à la création.
   status        EventStatus  @default(DRAFT)
   termsAccepted Boolean      @default(false)
   createdAt     DateTime     @default(now())
