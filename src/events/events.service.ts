@@ -219,6 +219,7 @@ export class EventsService {
         purchaseDeadline: deadline,
         dressCode: dto.dressCode ?? null,
         category: dto.category,
+        priceCurrency: dto.priceCurrency,
         termsAccepted: true,
         status: $Enums.EventStatus.PENDING_REVIEW,
         totalCapacity: eventCapacity, // null = billetterie illimitée ; sinon la jauge choisie

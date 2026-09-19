@@ -44,6 +44,11 @@ export class CreateEventDto {
   @IsEnum($Enums.EventCategory)
   category: $Enums.EventCategory;
 
+  // Devise de tarification de l'événement (USD ou CDF). Requise : choix explicite
+  // du créateur. Tous les prix de catégories sont exprimés dans cette devise.
+  @IsEnum($Enums.Currency)
+  priceCurrency: $Enums.Currency;
+
   @IsOptional()
   @IsNumber()
   gpsLat?: number;

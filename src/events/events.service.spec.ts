@@ -158,6 +158,13 @@ describe('EventsService.createEvent', () => {
     );
   });
 
+  it("persiste priceCurrency du DTO dans l'événement créé", async () => {
+    await service.createEvent('user-1', baseDto({ priceCurrency: 'CDF' as any }));
+
+    const createArg = prisma.event.create.mock.calls[0][0];
+    expect(createArg.data.priceCurrency).toBe('CDF');
+  });
+
   describe('contrat carte (createdById + giftedCount)', () => {
     // Garde : findOne n'a aucun `select` restrictif (include complet), donc
     // createdById (scalaire Event) et giftedCount (scalaire TicketCategory)
