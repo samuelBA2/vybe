@@ -9,13 +9,10 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
+import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { OtpService } from 'src/otp/otp.service';
-import {
-  PAYOUT_MAX_AMOUNT,
-  PAYOUT_MIN_AMOUNT,
-  USD_TO_CDF_RATE,
-} from 'src/common/constants';
+import { PAYOUT_MAX_AMOUNT, PAYOUT_MIN_AMOUNT } from 'src/common/constants';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type { PaymentProvider } from './payment-provider.interface';
@@ -23,6 +20,9 @@ import { EarningsService } from './earnings.service';
 import type { RequestPayoutDto } from './dto/request-payout.dto';
 
 type PayoutOutcome = 'PENDING' | 'COMPLETED' | 'FAILED' | 'REVIEW';
+
+// Arrondi USD (2 décimales) ; le CDF est arrondi à l'entier séparément.
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 @Injectable()
 export class PayoutsService {
@@ -36,42 +36,52 @@ export class PayoutsService {
     private readonly earnings: EarningsService,
   ) {}
 
-  // Étape 1 : valide (opérateur/devise, montant ∈ bornes, ≤ retirable), envoie un
-  // OTP à l'identifiant du compte, renvoie un tempToken typé + aperçu CDF.
+  // Étape 1 : valide (opérateur/devise, montant ∈ bornes, ≤ retirable de CETTE
+  // devise), envoie un OTP à l'identifiant du compte, renvoie un tempToken typé
+  // portant la devise + le montant. Le retrait s'opère dans la devise CHOISIE.
   async requestPayout(userId: string, dto: RequestPayoutDto) {
     const phoneNumber = this.normalizeMsisdn(dto.phoneNumber);
     if (!phoneNumber) {
       throw new BadRequestException('Numéro Mobile Money invalide.');
     }
 
-    // Opérateur doit exister et supporter le CDF (payout CDF).
+    const currency = dto.currency;
+
+    // Opérateur doit exister et supporter la devise demandée.
     const operators = await this.payment.getOperators();
     const op = operators.find((o) => o.code === dto.operator);
-    if (!op || !op.available || !op.currencies.includes('CDF')) {
+    if (!op || !op.available || !op.currencies.includes(currency)) {
       throw new BadRequestException(
-        'Opérateur indisponible pour un retrait en CDF.',
+        `Opérateur indisponible pour un retrait en ${currency}.`,
       );
     }
 
-    const { withdrawableUSD } = await this.earnings.getWithdrawable(userId);
-    const amountUSD = dto.all
-      ? withdrawableUSD
-      : Math.round((dto.amountUSD ?? 0) * 100) / 100;
+    const { withdrawable } = await this.earnings.getWithdrawable(
+      userId,
+      currency,
+    );
+    // Montant dans la devise : CDF en entier, USD à 2 décimales.
+    const amount = dto.all
+      ? withdrawable
+      : currency === 'CDF'
+        ? Math.round(dto.amount ?? 0)
+        : round2(dto.amount ?? 0);
 
-    if (amountUSD < PAYOUT_MIN_AMOUNT) {
+    if (amount < PAYOUT_MIN_AMOUNT) {
       throw new BadRequestException(
-        `Le montant minimum de retrait est de ${PAYOUT_MIN_AMOUNT} USD.`,
+        `Le montant minimum de retrait est de ${PAYOUT_MIN_AMOUNT}.`,
       );
     }
-    if (amountUSD > withdrawableUSD) {
+    if (amount > withdrawable) {
       throw new BadRequestException(
         'Montant supérieur à votre solde retirable disponible.',
       );
     }
-    // Filet défensif (le plafond opérateur exact est appliqué au câblage sandbox).
-    if (amountUSD > PAYOUT_MAX_AMOUNT) {
+    // Filet défensif hérité (bornes pensées USD) : le vrai min/max PAR DEVISE
+    // via l'active-conf de l'opérateur est appliqué au câblage sandbox.
+    if (amount > PAYOUT_MAX_AMOUNT) {
       throw new BadRequestException(
-        `Le montant maximum par retrait est de ${PAYOUT_MAX_AMOUNT} USD.`,
+        `Le montant maximum par retrait est de ${PAYOUT_MAX_AMOUNT}.`,
       );
     }
 
@@ -90,19 +100,14 @@ export class PayoutsService {
       {
         sub: userId,
         type: 'payout',
-        amountUSD,
+        currency,
+        amount,
         phoneNumber,
         operator: dto.operator,
       },
       { expiresIn: '10m' },
     );
-    const rate = USD_TO_CDF_RATE;
-    return {
-      tempToken,
-      amountUSD,
-      amountCDF: Math.round(amountUSD * rate),
-      rate,
-    };
+    return { tempToken, currency, amount };
   }
 
   // Étape 2 : vérifie token + OTP, débite le ledger + crée le Payout (transaction +
@@ -115,7 +120,8 @@ export class PayoutsService {
     let payload: {
       sub: string;
       type: string;
-      amountUSD: number;
+      currency: $Enums.Currency;
+      amount: number;
       phoneNumber: string;
       operator: string;
     };
@@ -134,13 +140,12 @@ export class PayoutsService {
     const identifier = user.email ?? user.phone;
     await this.otp.verifyOtp(identifier!, otp);
 
-    const rate = USD_TO_CDF_RATE;
-    const amountUSD = payload.amountUSD;
-    const amountCDF = Math.round(amountUSD * rate);
+    const currency = payload.currency;
+    const amount = payload.amount;
     const payoutRef = randomUUID();
 
     // Débit atomique : verrou par user (sérialise 2 demandes concurrentes), re-vérif
-    // du solde retirable, écriture PAYOUT_ORGANIZER (négatif) + Payout PENDING.
+    // du solde retirable de la devise, écriture PAYOUT_ORGANIZER (négatif) + Payout.
     const payout = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         'SELECT pg_advisory_xact_lock(hashtext($1))',
@@ -150,17 +155,19 @@ export class PayoutsService {
       // user ci-dessus sérialise les vérifications concurrentes, donc un 2e appelant
       // ne lit ce solde qu'après le COMMIT de la transaction du 1er ; en READ
       // COMMITTED il voit alors le débit déjà écrit — pas de sur-retrait possible.
-      const { withdrawableUSD } = await this.earnings.getWithdrawable(userId);
-      if (amountUSD > withdrawableUSD) {
+      const { withdrawable } = await this.earnings.getWithdrawable(
+        userId,
+        currency,
+      );
+      if (amount > withdrawable) {
         throw new BadRequestException('Solde retirable insuffisant.');
       }
       const created = await tx.payout.create({
         data: {
           payoutRef,
           userId,
-          amountUSD,
-          amountCDF,
-          rate,
+          currency,
+          amount,
           operator: payload.operator,
           destination: payload.phoneNumber,
           status: 'PENDING',
@@ -171,8 +178,8 @@ export class PayoutsService {
           account: 'ORGANIZER',
           userId,
           type: 'PAYOUT_ORGANIZER',
-          amount: -amountUSD,
-          currency: 'USD',
+          amount: -amount,
+          currency,
           payoutId: created.id,
         },
       });
@@ -183,8 +190,8 @@ export class PayoutsService {
     try {
       const init = await this.payment.initPayout({
         payoutRef,
-        amount: amountCDF,
-        currency: 'CDF',
+        amount,
+        currency,
         operator: payload.operator,
         phoneNumber: payload.phoneNumber,
       });
@@ -197,12 +204,12 @@ export class PayoutsService {
       // Rejet EXPLICITE renvoyé par le provider : l'argent n'est pas parti, on
       // annule le débit tout de suite.
       if (init.status !== 'PENDING' && init.status !== 'ACCEPTED') {
-        await this.reverse(payout.id, userId, amountUSD, 'FAILED');
+        await this.reverse(payout.id, userId, amount, currency, 'FAILED');
         return {
           payoutRef,
           status: 'FAILED' as PayoutOutcome,
-          amountUSD,
-          amountCDF,
+          currency,
+          amount,
         };
       }
     } catch (err) {
@@ -216,8 +223,8 @@ export class PayoutsService {
     return {
       payoutRef,
       status: 'PENDING' as PayoutOutcome,
-      amountUSD,
-      amountCDF,
+      currency,
+      amount,
     };
   }
 
@@ -239,8 +246,8 @@ export class PayoutsService {
     if (check.status === 'APPROVED' || check.status === 'ACCEPTED') {
       // Déviation acceptée par rapport au chemin dépôt (qui route une divergence de
       // montant vers REVIEW) : ici le montant du payout est fixé côté serveur
-      // (amountCDF calculé par nos soins, pas saisi par l'acheteur), donc il n'y a
-      // pas de divergence à arbitrer — APPROVED/ACCEPTED implique toujours COMPLETED.
+      // (amount calculé par nos soins, pas saisi par l'acheteur), donc il n'y a pas
+      // de divergence à arbitrer — APPROVED/ACCEPTED implique toujours COMPLETED.
       await this.prisma.payout.update({
         where: { id: payout.id },
         data: { status: 'COMPLETED', resolvedAt: new Date() },
@@ -248,7 +255,13 @@ export class PayoutsService {
       return { payoutRef, status: 'COMPLETED' };
     }
     if (check.status === 'DECLINED') {
-      await this.reverse(payout.id, payout.userId, payout.amountUSD, 'FAILED');
+      await this.reverse(
+        payout.id,
+        payout.userId,
+        payout.amount,
+        payout.currency,
+        'FAILED',
+      );
       return { payoutRef, status: 'FAILED' };
     }
     // Toujours en cours : le reaper (markStuck) peut basculer en REVIEW.
@@ -269,7 +282,8 @@ export class PayoutsService {
   private async reverse(
     payoutId: string,
     userId: string,
-    amountUSD: number,
+    amount: number,
+    currency: $Enums.Currency,
     status: 'FAILED' | 'REVIEW',
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
@@ -286,8 +300,8 @@ export class PayoutsService {
             account: 'ORGANIZER',
             userId,
             type: 'PAYOUT_REVERSAL',
-            amount: amountUSD, // positif : restaure le solde
-            currency: 'USD',
+            amount, // positif : restaure le solde (dans la devise du retrait)
+            currency,
             payoutId,
           },
         });
@@ -346,8 +360,8 @@ export class PayoutsService {
       take: limit + 1,
       select: {
         payoutRef: true,
-        amountUSD: true,
-        amountCDF: true,
+        currency: true,
+        amount: true,
         operator: true,
         destination: true,
         status: true,
@@ -370,8 +384,8 @@ export class PayoutsService {
       select: {
         payoutRef: true,
         status: true,
-        amountUSD: true,
-        amountCDF: true,
+        currency: true,
+        amount: true,
       },
     });
     if (!p) throw new NotFoundException('Retrait introuvable.');

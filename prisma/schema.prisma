@@ -322,7 +322,7 @@ model LedgerEntry {
   user      User            @relation(fields: [userId], references: [id]) 
   type      LedgerEntryType
   amount    Float           // SIGNÉ : crédits > 0, débits (payout/refund) < 0
-  currency  Currency        @default(USD) // ledger en USD = base comptable
+  currency  Currency        @default(USD) // multi-devises : écrit dans la devise de la commande/du retrait
   orderId   String?
   eventId   String?
   createdAt DateTime        @default(now())
@@ -343,9 +343,8 @@ model Payout {
   payoutRef        String       @unique
   userId           String
   user             User         @relation(fields: [userId], references: [id])
-  amountUSD        Float        // débité du ledger (base comptable)
-  amountCDF        Int          // réellement envoyé (entier)
-  rate             Float        // USD_TO_CDF_RATE figé à l'instant du retrait
+  currency         Currency     // devise du retrait (= devise de l'événement source)
+  amount           Float        // montant retiré, dans `currency` (entier si CDF)
   operator         String       // code opérateur PawaPay
   destination      String       // numéro MoMo (en clair)
   status           PayoutStatus @default(PENDING)

@@ -40,56 +40,91 @@ describe('PayoutsService', () => {
     jwt = {
       sign: jest.fn().mockReturnValue('temp.jwt'),
       verify: jest.fn().mockReturnValue({
-        sub: 'org-1', type: 'payout', amountUSD: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD',
+        sub: 'org-1', type: 'payout', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD',
       }),
     };
-    earnings = { getWithdrawable: jest.fn().mockResolvedValue({ withdrawableUSD: 100, withdrawableCDF: 225000 }) };
+    // getWithdrawable(userId, currency) → { currency, withdrawable }.
+    earnings = { getWithdrawable: jest.fn().mockResolvedValue({ currency: 'USD', withdrawable: 100 }) };
 
     service = new PayoutsService(prisma, provider, otp, jwt, earnings);
   });
 
   describe('requestPayout', () => {
-    it('valide, envoie OTP, renvoie tempToken + aperçu CDF', async () => {
+    it('valide, envoie OTP, renvoie tempToken + devise + montant', async () => {
       const res = await service.requestPayout('org-1', {
-        amountUSD: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD',
+        currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD',
       });
       expect(otp.sendPayoutEmailOtp).toHaveBeenCalledWith('a@b.co');
-      expect(res.tempToken).toBe('temp.jwt');
-      expect(res.amountUSD).toBe(50);
-      expect(res.amountCDF).toBe(Math.round(50 * res.rate));
+      expect(earnings.getWithdrawable).toHaveBeenCalledWith('org-1', 'USD');
+      expect(res).toEqual({ tempToken: 'temp.jwt', currency: 'USD', amount: 50 });
+      // Le token JWT porte la devise + le montant.
+      expect(jwt.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'payout', currency: 'USD', amount: 50 }),
+        expect.anything(),
+      );
     });
 
     it('refuse un montant > solde retirable', async () => {
       await expect(
-        service.requestPayout('org-1', { amountUSD: 500, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+        service.requestPayout('org-1', { currency: 'USD', amount: 500, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
       ).rejects.toThrow();
     });
 
-    it('all:true retire tout le solde maturé', async () => {
-      const res = await service.requestPayout('org-1', { all: true, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
-      expect(res.amountUSD).toBe(100);
+    it('all:true retire tout le solde maturé de la devise', async () => {
+      const res = await service.requestPayout('org-1', { currency: 'USD', all: true, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      expect(res.amount).toBe(100);
+    });
+
+    it('refuse un opérateur ne supportant pas la devise demandée', async () => {
+      provider.getOperators.mockResolvedValue([
+        { code: 'VODACOM_MPESA_COD', name: 'Vodacom', available: true, currencies: ['CDF'] },
+      ]);
+      await expect(
+        service.requestPayout('org-1', { currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('CDF : montant arrondi à l\'entier, retrait dans la devise choisie', async () => {
+      // NB : bornes PAYOUT_MIN/MAX_AMOUNT héritées (pensées USD) → montant CDF
+      // gardé sous le plafond filet (2000) pour ce test de rounding. Le vrai
+      // min/max par devise reste un point de câblage sandbox (cf. rapport).
+      earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 250000 });
+      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 1500.7, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      expect(earnings.getWithdrawable).toHaveBeenCalledWith('org-1', 'CDF');
+      expect(res).toEqual({ tempToken: 'temp.jwt', currency: 'CDF', amount: 1501 });
     });
   });
 
   describe('verifyPayout', () => {
-    it('débite le ledger (négatif) + crée Payout PENDING + initPayout', async () => {
+    it('débite le ledger (négatif, dans la devise) + crée Payout PENDING + initPayout', async () => {
       const res = await service.verifyPayout('org-1', '123456', 'temp.jwt');
       const ledgerArg = prisma.ledgerEntry.create.mock.calls[0][0].data;
       expect(ledgerArg.type).toBe('PAYOUT_ORGANIZER');
-      expect(ledgerArg.amount).toBeLessThan(0);
+      expect(ledgerArg.amount).toBe(-50);
+      expect(ledgerArg.currency).toBe('USD');
       expect(ledgerArg.payoutId).toBe('p1');
-      expect(provider.initPayout).toHaveBeenCalled();
-      expect(res.status).toBe('PENDING');
+      // Payout créé avec devise + montant.
+      const payoutArg = prisma.payout.create.mock.calls[0][0].data;
+      expect(payoutArg.currency).toBe('USD');
+      expect(payoutArg.amount).toBe(50);
+      // initPayout dans la devise du retrait.
+      expect(provider.initPayout).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 50, currency: 'USD' }),
+      );
+      expect(res).toEqual({ payoutRef: expect.any(String), status: 'PENDING', currency: 'USD', amount: 50 });
     });
 
-    it('échec init → reversal + Payout FAILED', async () => {
+    it('échec init → reversal (positif, même devise) + Payout FAILED', async () => {
       provider.initPayout.mockResolvedValue({ payoutRef: 'p1', status: 'DECLINED' });
       const res = await service.verifyPayout('org-1', '123456', 'temp.jwt');
       const reversal = prisma.ledgerEntry.create.mock.calls.find(
         (c: any[]) => c[0].data.type === 'PAYOUT_REVERSAL',
       );
-      expect(reversal[0].data.amount).toBeGreaterThan(0);
+      expect(reversal[0].data.amount).toBe(50);
+      expect(reversal[0].data.currency).toBe('USD');
       expect(res.status).toBe('FAILED');
+      expect(res.currency).toBe('USD');
+      expect(res.amount).toBe(50);
     });
 
     it('initPayout qui lève (erreur transport) → Payout reste PENDING, PAS de reversal', async () => {
@@ -109,7 +144,8 @@ describe('PayoutsService', () => {
       jwt.verify.mockReturnValue({
         sub: 'org-1',
         type: 'account-deletion',
-        amountUSD: 50,
+        currency: 'USD',
+        amount: 50,
         phoneNumber: '243812345678',
         operator: 'VODACOM_MPESA_COD',
       });
@@ -124,7 +160,8 @@ describe('PayoutsService', () => {
       jwt.verify.mockReturnValue({
         sub: 'someone-else',
         type: 'payout',
-        amountUSD: 50,
+        currency: 'USD',
+        amount: 50,
         phoneNumber: '243812345678',
         operator: 'VODACOM_MPESA_COD',
       });
@@ -138,14 +175,14 @@ describe('PayoutsService', () => {
 
   describe('resolvePayout', () => {
     it('APPROVED → COMPLETED', async () => {
-      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', amountUSD: 50, status: 'PENDING' });
+      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', currency: 'USD', amount: 50, status: 'PENDING' });
       provider.checkPayoutStatus.mockResolvedValue({ status: 'APPROVED' });
       const res = await service.resolvePayout('ref');
       expect(res.status).toBe('COMPLETED');
     });
 
-    it('DECLINED → FAILED + reversal (une seule fois)', async () => {
-      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', amountUSD: 50, status: 'PENDING' });
+    it('DECLINED → FAILED + reversal (une seule fois, même devise)', async () => {
+      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', currency: 'CDF', amount: 112500, status: 'PENDING' });
       provider.checkPayoutStatus.mockResolvedValue({ status: 'DECLINED' });
       const res = await service.resolvePayout('ref');
       expect(res.status).toBe('FAILED');
@@ -153,10 +190,12 @@ describe('PayoutsService', () => {
         (c: any[]) => c[0].data.type === 'PAYOUT_REVERSAL',
       );
       expect(reversal).toBeTruthy();
+      expect(reversal[0].data.amount).toBe(112500);
+      expect(reversal[0].data.currency).toBe('CDF');
     });
 
     it('DECLINED → reverse() prend le verrou advisory par user avant d\'écrire la reversal', async () => {
-      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', amountUSD: 50, status: 'PENDING' });
+      prisma.payout.findUnique.mockResolvedValue({ id: 'p1', payoutRef: 'ref', userId: 'org-1', currency: 'USD', amount: 50, status: 'PENDING' });
       provider.checkPayoutStatus.mockResolvedValue({ status: 'DECLINED' });
       await service.resolvePayout('ref');
       expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
@@ -210,22 +249,23 @@ describe('PayoutsService', () => {
       await expect(service.getPayoutStatus('org-1', 'ref')).rejects.toThrow();
     });
 
-    it('getPayoutStatus renvoie le statut quand trouvé (scope userId)', async () => {
+    it('getPayoutStatus renvoie le statut quand trouvé (currency + amount, scope userId)', async () => {
       prisma.payout.findFirst = jest.fn().mockResolvedValue({
-        payoutRef: 'ref', status: 'PENDING', amountUSD: 50, amountCDF: 112500,
+        payoutRef: 'ref', status: 'PENDING', currency: 'USD', amount: 50,
       });
       const res = await service.getPayoutStatus('org-1', 'ref');
       expect(prisma.payout.findFirst).toHaveBeenCalledWith(expect.objectContaining({
         where: { payoutRef: 'ref', userId: 'org-1' },
+        select: expect.objectContaining({ currency: true, amount: true }),
       }));
       expect(res.status).toBe('PENDING');
     });
 
-    it('listPayouts trie createdAt desc, keyset paginé (nextCursor si page suivante)', async () => {
+    it('listPayouts trie createdAt desc, keyset paginé (currency + amount, nextCursor si page suivante)', async () => {
       const rows = [
-        { payoutRef: 'p3', amountUSD: 10, amountCDF: 22500, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-03T10:00:00Z') },
-        { payoutRef: 'p2', amountUSD: 20, amountCDF: 45000, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-02T10:00:00Z') },
-        { payoutRef: 'p1', amountUSD: 30, amountCDF: 67500, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'PENDING', createdAt: new Date('2026-09-01T10:00:00Z') },
+        { payoutRef: 'p3', currency: 'USD', amount: 10, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-03T10:00:00Z') },
+        { payoutRef: 'p2', currency: 'CDF', amount: 45000, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-02T10:00:00Z') },
+        { payoutRef: 'p1', currency: 'USD', amount: 30, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'PENDING', createdAt: new Date('2026-09-01T10:00:00Z') },
       ];
       prisma.payout.findMany.mockResolvedValue(rows); // limit=2 → 3 lignes = page suivante
 
@@ -235,6 +275,7 @@ describe('PayoutsService', () => {
         where: { userId: 'org-1' },
         orderBy: [{ createdAt: 'desc' }, { payoutRef: 'desc' }],
         take: 3,
+        select: expect.objectContaining({ currency: true, amount: true }),
       }));
       expect(res.items).toHaveLength(2);
       expect(res.nextCursor).not.toBeNull();

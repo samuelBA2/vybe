@@ -1,15 +1,15 @@
 import { EarningsService } from './earnings.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-import {
-  PAYOUT_MATURATION_DAYS,
-  PLATFORM_FEE_RATE,
-  USD_TO_CDF_RATE,
-} from 'src/common/constants';
+import { PAYOUT_MATURATION_DAYS, PLATFORM_FEE_RATE } from 'src/common/constants';
 
 describe('EarningsService', () => {
   let service: EarningsService;
   let prisma: {
-    ledgerEntry: { aggregate: jest.Mock; findMany: jest.Mock };
+    ledgerEntry: {
+      aggregate: jest.Mock;
+      groupBy: jest.Mock;
+      findMany: jest.Mock;
+    };
     order: { aggregate: jest.Mock; groupBy: jest.Mock };
     event: { findMany: jest.Mock };
   };
@@ -17,18 +17,25 @@ describe('EarningsService', () => {
   beforeEach(() => {
     prisma = {
       ledgerEntry: {
+        // Agrégats de getWithdrawable : distingués par devise (args.where.currency).
         aggregate: jest.fn().mockImplementation((args: any) => {
+          const cur = args?.where?.currency;
           // Crédits de vente maturés (SALE_ORGANIZER + filtre createdAt).
           if (args?.where?.type === 'SALE_ORGANIZER') {
-            return Promise.resolve({ _sum: { amount: 100 } });
+            return Promise.resolve({
+              _sum: { amount: cur === 'CDF' ? 300000 : 100 },
+            });
           }
           // Débits/reversals de payout (PAYOUT_ORGANIZER + PAYOUT_REVERSAL).
           if (args?.where?.type?.in) {
-            return Promise.resolve({ _sum: { amount: -30 } });
+            return Promise.resolve({
+              _sum: { amount: cur === 'CDF' ? -50000 : -30 },
+            });
           }
-          // getSummary : solde total ORGANIZER.
           return Promise.resolve({ _sum: { amount: null } });
         }),
+        // Solde ORGANIZER groupé par devise (getSummary).
+        groupBy: jest.fn().mockResolvedValue([]),
         findMany: jest.fn().mockResolvedValue([]),
       },
       order: {
@@ -43,56 +50,143 @@ describe('EarningsService', () => {
   });
 
   describe('getSummary', () => {
-    it('agrège le solde (ledger ORGANIZER) + brut/commission/net (Order PAID) + conversion CDF', async () => {
-      prisma.ledgerEntry.aggregate.mockResolvedValue({ _sum: { amount: 170 } });
-      prisma.order.aggregate.mockResolvedValue({
-        _sum: { totalAmount: 200, platformFee: 30, organizerAmount: 170 },
-      });
+    it('renvoie un solde PAR DEVISE (jamais sommé) : balance + brut/commission/net + retirable', async () => {
+      prisma.ledgerEntry.groupBy.mockResolvedValue([
+        { currency: 'USD', _sum: { amount: 170 } },
+        { currency: 'CDF', _sum: { amount: 400000 } },
+      ]);
+      prisma.order.groupBy.mockResolvedValue([
+        {
+          currency: 'USD',
+          _sum: { totalAmount: 200, platformFee: 30, organizerAmount: 170 },
+        },
+        {
+          currency: 'CDF',
+          _sum: {
+            totalAmount: 500000,
+            platformFee: 100000,
+            organizerAmount: 400000,
+          },
+        },
+      ]);
 
       const res = await service.getSummary('org-1');
 
-      // Solde disponible = Σ ledger ORGANIZER de l'utilisateur.
-      expect(prisma.ledgerEntry.aggregate).toHaveBeenCalledWith(expect.objectContaining({
-        _sum: { amount: true },
-        where: { userId: 'org-1', account: 'ORGANIZER' },
-      }));
-      // Brut/commission/net = agrégats des commandes PAID des événements de l'orga.
-      expect(prisma.order.aggregate).toHaveBeenCalledWith(expect.objectContaining({
-        where: {
-          paymentStatus: 'PAID',
-          ticketCategory: { event: { createdById: 'org-1' } },
-        },
-      }));
+      // Solde groupé par devise sur le ledger ORGANIZER de l'utilisateur.
+      expect(prisma.ledgerEntry.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          by: ['currency'],
+          _sum: { amount: true },
+          where: { userId: 'org-1', account: 'ORGANIZER' },
+        }),
+      );
+      // Brut/commission/net groupés par devise sur les commandes PAID de l'orga.
+      expect(prisma.order.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          by: ['currency'],
+          where: {
+            paymentStatus: 'PAID',
+            ticketCategory: { event: { createdById: 'org-1' } },
+          },
+        }),
+      );
 
-      // Le mock d'aggregate ci-dessus renvoie 170 sur tous les appels (y compris
-      // ceux de getWithdrawable) : retirable = 170 (maturé) + 170 (payouts) = 340.
-      expect(res).toEqual({
-        availableBalanceUSD: 170,
-        availableBalanceCDF: Math.round(170 * USD_TO_CDF_RATE),
-        grossSoldUSD: 200,
-        platformFeeUSD: 30,
-        netEarnedUSD: 170,
-        rate: USD_TO_CDF_RATE,
-        withdrawableUSD: 340,
-        withdrawableCDF: Math.round(340 * USD_TO_CDF_RATE),
+      // Une entrée par devise (USD et CDF), jamais sommées.
+      expect(res.balances).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ currency: 'USD' }),
+          expect.objectContaining({ currency: 'CDF' }),
+        ]),
+      );
+      const usd = res.balances.find((b) => b.currency === 'USD');
+      const cdf = res.balances.find((b) => b.currency === 'CDF');
+      // USD : withdrawable = 100 (maturé) − 30 (payouts) = 70.
+      expect(usd).toEqual({
+        currency: 'USD',
+        balance: 170,
+        gross: 200,
+        commission: 30,
+        net: 170,
+        withdrawable: 70,
       });
+      // CDF (entiers) : withdrawable = 300000 − 50000 = 250000.
+      expect(cdf).toEqual({
+        currency: 'CDF',
+        balance: 400000,
+        gross: 500000,
+        commission: 100000,
+        net: 400000,
+        withdrawable: 250000,
+      });
+      // Plus de champs mono-devise / taux.
+      expect(res).not.toHaveProperty('availableBalanceUSD');
+      expect(res).not.toHaveProperty('rate');
     });
 
-    it('aucune vente → tout à zéro (agrégats nuls)', async () => {
+    it('aucune activité → liste de soldes vide', async () => {
       const res = await service.getSummary('org-1');
-      // Solde total ORGANIZER nul, mais le mock par défaut du beforeEach
-      // renvoie tout de même des crédits maturés (100) et des payouts (-30)
-      // pour les appels dédiés de getWithdrawable → retirable = 70.
-      expect(res).toEqual({
-        availableBalanceUSD: 0,
-        availableBalanceCDF: 0,
-        grossSoldUSD: 0,
-        platformFeeUSD: 0,
-        netEarnedUSD: 0,
-        rate: USD_TO_CDF_RATE,
-        withdrawableUSD: 70,
-        withdrawableCDF: Math.round(70 * USD_TO_CDF_RATE),
+      expect(res.balances).toEqual([]);
+    });
+  });
+
+  describe('getWithdrawable', () => {
+    it('retirable CDF : crédits maturés − payouts nets, filtré par devise, entier', async () => {
+      const before = Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
+      const res = await service.getWithdrawable('org-1', 'CDF');
+      const after = Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
+
+      // Crédits maturés : SALE_ORGANIZER, scope user, devise CDF, createdAt ≤ cutoff.
+      const creditCall = prisma.ledgerEntry.aggregate.mock.calls.find(
+        (c: any[]) => c[0]?.where?.type === 'SALE_ORGANIZER',
+      );
+      expect(creditCall[0].where.userId).toBe('org-1');
+      expect(creditCall[0].where.account).toBe('ORGANIZER');
+      expect(creditCall[0].where.currency).toBe('CDF');
+      expect(creditCall[0].where.createdAt.lte).toBeInstanceOf(Date);
+      const cutoffMs = creditCall[0].where.createdAt.lte.getTime();
+      expect(cutoffMs).toBeGreaterThanOrEqual(before);
+      expect(cutoffMs).toBeLessThanOrEqual(after);
+
+      // Payouts : PAYOUT_ORGANIZER + PAYOUT_REVERSAL, filtrés CDF.
+      const payoutCall = prisma.ledgerEntry.aggregate.mock.calls.find(
+        (c: any[]) => c[0]?.where?.type?.in,
+      );
+      expect(payoutCall[0].where.type.in).toEqual([
+        'PAYOUT_ORGANIZER',
+        'PAYOUT_REVERSAL',
+      ]);
+      expect(payoutCall[0].where.currency).toBe('CDF');
+
+      // 300000 (maturé) + (−50000 payouts) = 250000.
+      expect(res).toEqual({ currency: 'CDF', withdrawable: 250000 });
+    });
+
+    it('retirable USD : round2, filtré par devise', async () => {
+      const res = await service.getWithdrawable('org-1', 'USD');
+      // 100 (maturé) − 30 (payouts) = 70.
+      expect(res).toEqual({ currency: 'USD', withdrawable: 70 });
+    });
+
+    it('ne descend jamais sous 0', async () => {
+      prisma.ledgerEntry.aggregate.mockImplementation((args: any) => {
+        if (args?.where?.type === 'SALE_ORGANIZER')
+          return Promise.resolve({ _sum: { amount: 10 } });
+        if (args?.where?.type?.in)
+          return Promise.resolve({ _sum: { amount: -25 } });
+        return Promise.resolve({ _sum: { amount: null } });
       });
+      const res = await service.getWithdrawable('org-1', 'USD');
+      expect(res.withdrawable).toBe(0);
+    });
+  });
+
+  describe('getWithdrawableAll', () => {
+    it('renvoie le retirable des DEUX devises', async () => {
+      const res = await service.getWithdrawableAll('org-1');
+      expect(res).toEqual([
+        { currency: 'USD', withdrawable: 70 },
+        { currency: 'CDF', withdrawable: 250000 },
+      ]);
     });
   });
 
@@ -132,13 +226,14 @@ describe('EarningsService', () => {
   });
 
   describe('getEventsBreakdown', () => {
-    it('agrège par événement via catégories (PAID only), net=85 %, revenu par catégorie, scope createdById', async () => {
+    it('agrège par événement via catégories (PAID only), net=85 %, revenu par catégorie, devise par event, scope createdById', async () => {
       prisma.event.findMany.mockResolvedValue([
         {
           reference: 'evt_1',
           title: 'Soirée',
           startDate: new Date('2026-10-02T20:00:00.000Z'),
           status: 'PUBLISHED',
+          priceCurrency: 'USD',
           ticketCategories: [
             { id: 'c1', name: 'Standard' },
             { id: 'c2', name: 'VIP' },
@@ -150,6 +245,7 @@ describe('EarningsService', () => {
           title: 'Sans vente',
           startDate: new Date('2026-11-01T18:00:00.000Z'),
           status: 'PUBLISHED',
+          priceCurrency: 'CDF',
           ticketCategories: [{ id: 'c3', name: 'Base' }],
           mediaFiles: [],
         },
@@ -162,9 +258,6 @@ describe('EarningsService', () => {
 
       const res = await service.getEventsBreakdown('org-1');
 
-      // Scope strict aux événements de l'organisateur, limité aux statuts
-      // comptables (PUBLISHED/CLOSED) : brouillons, en revue, refusés et
-      // annulés n'apparaissent pas dans la comptabilité.
       expect(prisma.event.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
@@ -173,7 +266,6 @@ describe('EarningsService', () => {
           },
         }),
       );
-      // Agrégat PAID uniquement, sur toutes les catégories des événements.
       expect(prisma.order.groupBy).toHaveBeenCalledWith(
         expect.objectContaining({
           by: ['ticketCategoryId'],
@@ -181,7 +273,6 @@ describe('EarningsService', () => {
         }),
       );
 
-      expect(res.usdToCdfRate).toBe(USD_TO_CDF_RATE);
       expect(res.platformFeeRate).toBe(PLATFORM_FEE_RATE);
       expect(res.events).toEqual([
         {
@@ -190,6 +281,7 @@ describe('EarningsService', () => {
           startDate: new Date('2026-10-02T20:00:00.000Z'),
           posterUrl: 'https://poster/1.jpg',
           status: 'PUBLISHED',
+          currency: 'USD',
           gross: 100,
           commission: 15,
           net: 85,
@@ -206,6 +298,7 @@ describe('EarningsService', () => {
           startDate: new Date('2026-11-01T18:00:00.000Z'),
           posterUrl: null,
           status: 'PUBLISHED',
+          currency: 'CDF',
           gross: 0,
           commission: 0,
           net: 0,
@@ -222,57 +315,5 @@ describe('EarningsService', () => {
       expect(res.events).toEqual([]);
       expect(prisma.order.groupBy).not.toHaveBeenCalled();
     });
-  });
-
-  describe('getWithdrawable', () => {
-    it('retirable = crédits maturés − payouts nets, scope user, CDF au taux', async () => {
-      const before = Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
-      const res = await service.getWithdrawable('org-1');
-      const after = Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
-
-      // Crédits maturés : SALE_ORGANIZER, scope user, createdAt ≤ cutoff.
-      const creditCall = prisma.ledgerEntry.aggregate.mock.calls.find(
-        (c: any[]) => c[0]?.where?.type === 'SALE_ORGANIZER',
-      );
-      expect(creditCall[0].where.userId).toBe('org-1');
-      expect(creditCall[0].where.account).toBe('ORGANIZER');
-      expect(creditCall[0].where.createdAt.lte).toBeInstanceOf(Date);
-      // Cutoff = maintenant − PAYOUT_MATURATION_DAYS jours (encadré par before/after).
-      const cutoffMs = creditCall[0].where.createdAt.lte.getTime();
-      expect(cutoffMs).toBeGreaterThanOrEqual(before);
-      expect(cutoffMs).toBeLessThanOrEqual(after);
-
-      // Payouts : PAYOUT_ORGANIZER + PAYOUT_REVERSAL (pas de filtre maturation).
-      const payoutCall = prisma.ledgerEntry.aggregate.mock.calls.find(
-        (c: any[]) => c[0]?.where?.type?.in,
-      );
-      expect(payoutCall[0].where.type.in).toEqual([
-        'PAYOUT_ORGANIZER',
-        'PAYOUT_REVERSAL',
-      ]);
-      expect(payoutCall[0].where.userId).toBe('org-1');
-
-      // 100 (maturé) + (−30 net payouts) = 70.
-      expect(res.withdrawableUSD).toBe(70);
-      expect(res.withdrawableCDF).toBe(Math.round(70 * USD_TO_CDF_RATE));
-    });
-
-    it('ne descend jamais sous 0', async () => {
-      prisma.ledgerEntry.aggregate.mockImplementation((args: any) => {
-        if (args?.where?.type === 'SALE_ORGANIZER')
-          return Promise.resolve({ _sum: { amount: 10 } });
-        if (args?.where?.type?.in)
-          return Promise.resolve({ _sum: { amount: -25 } });
-        return Promise.resolve({ _sum: { amount: null } });
-      });
-      const res = await service.getWithdrawable('org-1');
-      expect(res.withdrawableUSD).toBe(0);
-    });
-  });
-
-  it('getSummary expose aussi le solde retirable', async () => {
-    const res = await service.getSummary('org-1');
-    expect(res).toHaveProperty('withdrawableUSD');
-    expect(res).toHaveProperty('withdrawableCDF');
   });
 });

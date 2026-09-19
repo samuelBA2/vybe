@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import {
   PAYOUT_MATURATION_DAYS,
@@ -9,24 +10,37 @@ import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// Quantifie un montant dans sa devise : CDF en entiers (PawaPay refuse les
+// décimales), USD à 2 décimales.
+const quantize = (n: number, currency: $Enums.Currency) =>
+  currency === 'CDF' ? Math.round(n) : round2(n);
+
+// Devises supportées (ordre stable pour getWithdrawableAll / l'UI).
+const CURRENCIES: $Enums.Currency[] = ['USD', 'CDF'];
+
 // Comptabilité organisateur (lecture seule V1). Le ledger est la SOURCE DE VÉRITÉ
 // des soldes ; les agrégats de commandes servent la ventilation (brut/commission/net).
-// Affichage CDF converti au taux figé USD_TO_CDF_RATE. Le retrait (payout) = Lot 2.
+// MULTI-DEVISES : un organisateur peut détenir un solde USD ET un solde CDF, jamais
+// sommés entre eux (chaque devise se retire séparément). Le retrait (payout) = Lot 2.
 @Injectable()
 export class EarningsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Solde disponible (= net 80 % cumulé, ce que l'organisateur pourra retirer au
-  // Lot 2) + ventilation brut / commission / net. Scope strict à l'utilisateur.
+  // Solde PAR DEVISE : une entrée par devise ayant de l'activité (solde ledger OU
+  // ventes), avec balance + ventilation brut/commission/net + retirable. JAMAIS de
+  // somme inter-devises. Scope strict à l'utilisateur.
   async getSummary(userId: string) {
-    // Solde = Σ des écritures ORGANIZER de l'utilisateur (source de vérité).
-    const balance = await this.prisma.ledgerEntry.aggregate({
+    // Solde = Σ des écritures ORGANIZER de l'utilisateur, groupé par devise.
+    const balanceGroups = await this.prisma.ledgerEntry.groupBy({
+      by: ['currency'],
       _sum: { amount: true },
       where: { userId, account: 'ORGANIZER' },
     });
 
-    // Ventilation depuis les commandes PAID des événements créés par l'utilisateur.
-    const sold = await this.prisma.order.aggregate({
+    // Ventilation depuis les commandes PAID des événements créés par l'utilisateur,
+    // groupée par devise (Order.currency = event.priceCurrency depuis T3).
+    const soldGroups = await this.prisma.order.groupBy({
+      by: ['currency'],
       _sum: { totalAmount: true, platformFee: true, organizerAmount: true },
       where: {
         paymentStatus: 'PAID',
@@ -34,29 +48,39 @@ export class EarningsService {
       },
     });
 
-    const availableBalanceUSD = round2(balance._sum.amount ?? 0);
-    const grossSoldUSD = round2(sold._sum.totalAmount ?? 0);
-    const platformFeeUSD = round2(sold._sum.platformFee ?? 0);
-    const netEarnedUSD = round2(sold._sum.organizerAmount ?? 0);
-    const withdrawable = await this.getWithdrawable(userId);
+    // Union des devises ayant de l'activité (solde ou ventes).
+    const currencies = CURRENCIES.filter(
+      (c) =>
+        balanceGroups.some((g) => g.currency === c) ||
+        soldGroups.some((g) => g.currency === c),
+    );
 
-    return {
-      availableBalanceUSD,
-      availableBalanceCDF: Math.round(availableBalanceUSD * USD_TO_CDF_RATE),
-      grossSoldUSD,
-      platformFeeUSD,
-      netEarnedUSD,
-      rate: USD_TO_CDF_RATE,
-      ...withdrawable,
-    };
+    const balances = await Promise.all(
+      currencies.map(async (currency) => {
+        const bal = balanceGroups.find((g) => g.currency === currency);
+        const sold = soldGroups.find((g) => g.currency === currency);
+        const { withdrawable } = await this.getWithdrawable(userId, currency);
+        return {
+          currency,
+          balance: quantize(bal?._sum.amount ?? 0, currency),
+          gross: quantize(sold?._sum.totalAmount ?? 0, currency),
+          commission: quantize(sold?._sum.platformFee ?? 0, currency),
+          net: quantize(sold?._sum.organizerAmount ?? 0, currency),
+          withdrawable,
+        };
+      }),
+    );
+
+    return { balances };
   }
 
-  // Solde RETIRABLE (≠ solde total créance). Seules les ventes maturées comptent
-  // côté crédit ; les payouts (débits + reversals) comptent immédiatement. Un
-  // débit est donc toujours adossé à du crédit maturé. Jamais < 0.
+  // Solde RETIRABLE d'UNE devise (≠ solde total créance). Seules les ventes
+  // maturées comptent côté crédit ; les payouts (débits + reversals) comptent
+  // immédiatement. Un débit est donc toujours adossé à du crédit maturé. Jamais < 0.
   async getWithdrawable(
     userId: string,
-  ): Promise<{ withdrawableUSD: number; withdrawableCDF: number }> {
+    currency: $Enums.Currency,
+  ): Promise<{ currency: $Enums.Currency; withdrawable: number }> {
     const cutoff = new Date(
       Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000,
     );
@@ -67,6 +91,7 @@ export class EarningsService {
         userId,
         account: 'ORGANIZER',
         type: 'SALE_ORGANIZER',
+        currency,
         createdAt: { lte: cutoff },
       },
     });
@@ -77,22 +102,27 @@ export class EarningsService {
         userId,
         account: 'ORGANIZER',
         type: { in: ['PAYOUT_ORGANIZER', 'PAYOUT_REVERSAL'] },
+        currency,
       },
     });
 
     const raw = (maturedCredits._sum.amount ?? 0) + (payouts._sum.amount ?? 0);
-    const withdrawableUSD = Math.max(0, round2(raw));
-    return {
-      withdrawableUSD,
-      withdrawableCDF: Math.round(withdrawableUSD * USD_TO_CDF_RATE),
-    };
+    return { currency, withdrawable: Math.max(0, quantize(raw, currency)) };
+  }
+
+  // Retirable des DEUX devises (pour l'UI : affiche USD et CDF séparément).
+  async getWithdrawableAll(
+    userId: string,
+  ): Promise<{ currency: $Enums.Currency; withdrawable: number }[]> {
+    return Promise.all(CURRENCIES.map((c) => this.getWithdrawable(userId, c)));
   }
 
   // Recettes PAR ÉVÉNEMENT (lecture seule). Order n'a pas d'eventId : on agrège
   // les commandes PAID par ticketCategoryId (une requête), puis on regroupe
-  // catégorie→événement en mémoire. Montants USD (base comptable) ; le front
-  // affiche le CDF via usdToCdfRate. La réponse porte aussi le détail par
-  // catégorie → sert la liste ET le drill-down sans second appel.
+  // catégorie→événement en mémoire. Chaque événement porte SA devise
+  // (event.priceCurrency) ; les montants sont déjà dans cette devise (Order.currency
+  // = event.priceCurrency depuis T3) → aucune conversion. La réponse porte aussi le
+  // détail par catégorie → sert la liste ET le drill-down sans second appel.
   async getEventsBreakdown(userId: string) {
     const events = await this.prisma.event.findMany({
       // Scope strict à l'organisateur, limité aux statuts comptables :
@@ -105,6 +135,7 @@ export class EarningsService {
         title: true,
         startDate: true,
         status: true,
+        priceCurrency: true,
         ticketCategories: { select: { id: true, name: true } },
         mediaFiles: {
           where: { isPoster: true },
@@ -181,6 +212,7 @@ export class EarningsService {
         startDate: e.startDate,
         posterUrl: e.mediaFiles[0]?.url ?? null,
         status: e.status,
+        currency: e.priceCurrency,
         gross: round2(gross),
         commission: round2(commission),
         net: round2(net),
