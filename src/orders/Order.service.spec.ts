@@ -3,15 +3,18 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { OrderService } from './Order.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PLATFORM_FEE_RATE } from 'src/common/constants';
 import { PaymentProvider } from 'src/payments/payment-provider.interface';
+import { PaymentsService } from 'src/payments/payments.service';
 
 describe('OrderService', () => {
   let service: OrderService;
+  let payments: { resolvePayment: jest.Mock };
   // Le client de transaction (tx) passé au callback de $transaction.
   let tx: {
     $executeRaw: jest.Mock;
@@ -61,9 +64,11 @@ describe('OrderService', () => {
         { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, currencies: ['USD', 'CDF'] },
       ]),
     };
+    payments = { resolvePayment: jest.fn().mockResolvedValue(undefined) };
     service = new OrderService(
       prisma as unknown as PrismaService,
       provider as unknown as PaymentProvider,
+      payments as unknown as PaymentsService,
     );
   });
 
@@ -413,6 +418,53 @@ describe('OrderService', () => {
       ]);
       const res = await service.getPaymentStatus('user-1', 'ref-1');
       expect(res.status).toBe('REVIEW');
+    });
+
+    it('PENDING → re-vérifie via resolvePayment (source de vérité) puis reflète le nouveau statut', async () => {
+      // 1re lecture : PENDING → déclenche resolvePayment ; 2e lecture : FAILED
+      // (le fournisseur a confirmé le refus, résolu en base par resolvePayment).
+      prisma.order.findMany
+        .mockResolvedValueOnce([
+          { id: 'o1', paymentStatus: 'PENDING', currency: 'CDF', chargedAmount: 2500 },
+        ])
+        .mockResolvedValueOnce([
+          { id: 'o1', paymentStatus: 'FAILED', currency: 'CDF', chargedAmount: 2500 },
+        ]);
+      const res = await service.getPaymentStatus('user-1', 'ref-1');
+      expect(payments.resolvePayment).toHaveBeenCalledWith('ref-1');
+      expect(res.status).toBe('FAILED');
+    });
+
+    it('statut déjà terminal → ne re-vérifie pas le fournisseur', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PAID', currency: 'USD', chargedAmount: 100 },
+      ]);
+      prisma.ticket.findMany.mockResolvedValue([]);
+      await service.getPaymentStatus('user-1', 'ref-1');
+      expect(payments.resolvePayment).not.toHaveBeenCalled();
+    });
+
+    it('throttle : deux polls rapprochés sur la même réf → resolvePayment appelé une seule fois', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 100 },
+      ]);
+      await service.getPaymentStatus('user-1', 'ref-1');
+      await service.getPaymentStatus('user-1', 'ref-1');
+      expect(payments.resolvePayment).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolvePayment échoue (fournisseur injoignable) → renvoie l’état courant sans throw', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'o1', paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 100 },
+      ]);
+      payments.resolvePayment.mockRejectedValueOnce(new Error('PawaPay injoignable'));
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      const res = await service.getPaymentStatus('user-1', 'ref-1');
+      expect(res.status).toBe('PENDING');
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
     });
   });
 });

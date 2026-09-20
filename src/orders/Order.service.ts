@@ -1,20 +1,32 @@
-import { Injectable, Inject, NotFoundException, ForbiddenException, BadRequestException, ConflictException, BadGatewayException } from "@nestjs/common";
+import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException, BadGatewayException } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { PrismaService } from "src/prisma/prisma.service";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
 import { PAYMENT_PROVIDER } from "src/payments/payment-provider.interface";
 import type { PaymentProvider } from "src/payments/payment-provider.interface";
+import { PaymentsService } from "src/payments/payments.service";
 import { splitAmount } from "src/common/money";
 
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// Anti-martèlement : le front sonde /status toutes les ~3 s ; on ne re-vérifie
+// le paiement auprès du fournisseur (checkStatus) qu'au plus une fois par
+// fenêtre de ce délai et par référence, pour ne pas taper PawaPay à chaque poll.
+const STATUS_RESOLVE_THROTTLE_MS = 8_000;
+
 @Injectable()
 export class OrderService {
+
+    private readonly logger = new Logger(OrderService.name);
+    // Horodatage de la dernière re-vérification par paymentRef (throttle du poll).
+    // Purgé dès que la commande atteint un statut terminal → borné aux checkouts en cours.
+    private readonly lastResolveAt = new Map<string, number>();
 
     constructor (
         private readonly prisma: PrismaService,
         @Inject(PAYMENT_PROVIDER) private readonly payment: PaymentProvider,
+        private readonly payments: PaymentsService,
     ){}
     async createOrder(userId: string, dto: CreateOrderDto){
         const items = dto.items;
@@ -165,12 +177,28 @@ export class OrderService {
     // une référence qui n'est pas à lui (réponse neutre = 404). ticketIds fournis
     // seulement si PAID (ids seuls — le qrToken ne sort que par l'endpoint gardé).
     async getPaymentStatus(userId: string, paymentRef: string) {
-        const orders = await this.prisma.order.findMany({
-            where: { userId, paymentRef },
-            select: { id: true, paymentStatus: true, currency: true, chargedAmount: true },
-        });
+        let orders = await this.loadCheckoutOrders(userId, paymentRef);
         if (orders.length === 0) {
             throw new NotFoundException('Paiement introuvable.');
+        }
+
+        // Auto-vérification : tant qu'une commande est PENDING, on re-vérifie
+        // activement auprès du fournisseur (checkStatus via resolvePayment = source
+        // de vérité) au lieu d'attendre le seul callback (qui peut ne jamais
+        // arriver : test local injoignable, callback perdu…) ou le reaper (jusqu'à
+        // 25 min). resolvePayment est idempotent : PENDING → no-op, DECLINED →
+        // FAILED, COMPLETED → PAID + billets. Throttlé par référence pour ne pas
+        // marteler le fournisseur à chaque poll ; on ne casse JAMAIS la lecture de
+        // statut si le fournisseur est injoignable (le reaper reste le filet).
+        if (orders.some((o) => o.paymentStatus === 'PENDING') && this.shouldResolve(paymentRef)) {
+            try {
+                await this.payments.resolvePayment(paymentRef);
+                orders = await this.loadCheckoutOrders(userId, paymentRef);
+            } catch (err) {
+                this.logger.warn(
+                    `Auto-vérification du paiement ${paymentRef} échouée (état courant renvoyé) : ${String(err)}`,
+                );
+            }
         }
 
         const statuses = orders.map((o) => o.paymentStatus);
@@ -183,6 +211,10 @@ export class OrderService {
         else if (statuses.some((s) => s === 'PAID')) status = 'REVIEW';
         else status = 'FAILED'; // toutes FAILED/EXPIRED
 
+        // Statut terminal atteint : plus rien à re-vérifier → on purge l'entrée de
+        // throttle pour borner la Map aux seuls checkouts encore en cours.
+        if (status !== 'PENDING') this.lastResolveAt.delete(paymentRef);
+
         const chargedAmount = orders.reduce((s, o) => s + o.chargedAmount, 0);
         const base = { paymentRef, status, currency: orders[0].currency, chargedAmount };
         if (status !== 'PAID') return base;
@@ -192,5 +224,25 @@ export class OrderService {
             select: { id: true },
         });
         return { ...base, ticketIds: tickets.map((t) => t.id) };
+    }
+
+    // Charge les commandes d'un checkout (scope strict userId+paymentRef). Isolé
+    // car appelé jusqu'à deux fois par getPaymentStatus (avant/après re-vérification).
+    private loadCheckoutOrders(userId: string, paymentRef: string) {
+        return this.prisma.order.findMany({
+            where: { userId, paymentRef },
+            select: { id: true, paymentStatus: true, currency: true, chargedAmount: true },
+        });
+    }
+
+    // Throttle de l'auto-vérification : true au plus une fois par fenêtre
+    // STATUS_RESOLVE_THROTTLE_MS et par référence. Marque l'instant courant quand
+    // il autorise, pour que les polls rapprochés suivants soient ignorés.
+    private shouldResolve(paymentRef: string): boolean {
+        const now = Date.now();
+        const last = this.lastResolveAt.get(paymentRef) ?? 0;
+        if (now - last < STATUS_RESOLVE_THROTTLE_MS) return false;
+        this.lastResolveAt.set(paymentRef, now);
+        return true;
     }
 }

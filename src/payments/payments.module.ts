@@ -38,6 +38,6 @@ import { OtpModule } from 'src/otp/otp.module';
     PayoutsService,
     PayoutsCleanupService,
   ],
-  exports: [PAYMENT_PROVIDER],
+  exports: [PAYMENT_PROVIDER, PaymentsService],
 })
 export class PaymentsModule {}
