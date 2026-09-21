@@ -20,8 +20,15 @@ describe('EarningsService', () => {
         // Agrégats de getWithdrawable : distingués par devise (args.where.currency).
         aggregate: jest.fn().mockImplementation((args: any) => {
           const cur = args?.where?.currency;
-          // Crédits de vente maturés (SALE_ORGANIZER + filtre createdAt).
           if (args?.where?.type === 'SALE_ORGANIZER') {
+            // Ventes NON maturées (createdAt > cutoff) : par défaut aucune.
+            if (args?.where?.createdAt?.gt) {
+              return Promise.resolve({
+                _sum: { amount: null },
+                _min: { createdAt: null },
+              });
+            }
+            // Crédits de vente maturés (createdAt ≤ cutoff).
             return Promise.resolve({
               _sum: { amount: cur === 'CDF' ? 300000 : 100 },
             });
@@ -100,7 +107,7 @@ describe('EarningsService', () => {
       );
       const usd = res.balances.find((b) => b.currency === 'USD');
       const cdf = res.balances.find((b) => b.currency === 'CDF');
-      // USD : withdrawable = 100 (maturé) − 30 (payouts) = 70.
+      // USD : withdrawable = 100 (maturé) − 30 (payouts) = 70 ; min 2 USD ; rien en maturation.
       expect(usd).toEqual({
         currency: 'USD',
         balance: 170,
@@ -108,8 +115,11 @@ describe('EarningsService', () => {
         commission: 30,
         net: 170,
         withdrawable: 70,
+        minWithdrawal: 2,
+        maturingAmount: 0,
+        nextMaturesAt: null,
       });
-      // CDF (entiers) : withdrawable = 300000 − 50000 = 250000.
+      // CDF (entiers) : withdrawable = 300000 − 50000 = 250000 ; min 4500 CDF (2 USD × 2250).
       expect(cdf).toEqual({
         currency: 'CDF',
         balance: 400000,
@@ -117,6 +127,9 @@ describe('EarningsService', () => {
         commission: 100000,
         net: 400000,
         withdrawable: 250000,
+        minWithdrawal: 4500,
+        maturingAmount: 0,
+        nextMaturesAt: null,
       });
       // Plus de champs mono-devise / taux.
       expect(res).not.toHaveProperty('availableBalanceUSD');
@@ -126,6 +139,38 @@ describe('EarningsService', () => {
     it('aucune activité → liste de soldes vide', async () => {
       const res = await service.getSummary('org-1');
       expect(res.balances).toEqual([]);
+    });
+
+    it('expose minWithdrawal + maturingAmount + date de maturation quand une vente est encore en maturation', async () => {
+      prisma.ledgerEntry.groupBy.mockResolvedValue([
+        { currency: 'CDF', _sum: { amount: 2500 } },
+      ]);
+      prisma.order.groupBy.mockResolvedValue([
+        { currency: 'CDF', _sum: { totalAmount: 2500, platformFee: 500, organizerAmount: 2000 } },
+      ]);
+      // Vente CDF non maturée : créée il y a 2 jours (createdAt > cutoff).
+      const soldAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      prisma.ledgerEntry.aggregate.mockImplementation((args: any) => {
+        if (args?.where?.type === 'SALE_ORGANIZER') {
+          if (args?.where?.createdAt?.gt) {
+            return Promise.resolve({ _sum: { amount: 2000 }, _min: { createdAt: soldAt } });
+          }
+          return Promise.resolve({ _sum: { amount: null } }); // rien de maturé
+        }
+        if (args?.where?.type?.in) return Promise.resolve({ _sum: { amount: null } });
+        return Promise.resolve({ _sum: { amount: null } });
+      });
+
+      const res = await service.getSummary('org-1');
+      const cdf = res.balances.find((b) => b.currency === 'CDF')!;
+
+      expect(cdf.withdrawable).toBe(0); // rien de maturé encore
+      expect(cdf.minWithdrawal).toBe(4500);
+      expect(cdf.maturingAmount).toBe(2000);
+      // Déblocage = createdAt de la vente + PAYOUT_MATURATION_DAYS.
+      expect(cdf.nextMaturesAt).toBe(
+        new Date(soldAt.getTime() + PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+      );
     });
   });
 

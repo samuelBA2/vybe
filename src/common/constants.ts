@@ -100,7 +100,7 @@ export const PAYOUT_MATURATION_DAYS = Number(
 
 // Plancher métier d'un retrait (USD). La borne réelle = max(ce plancher,
 // minAmount de l'opérateur lu depuis active-conf).
-export const PAYOUT_MIN_AMOUNT = Number(process.env.PAYOUT_MIN_AMOUNT ?? 5);
+export const PAYOUT_MIN_AMOUNT = Number(process.env.PAYOUT_MIN_AMOUNT ?? 2);
 
 // Filet DÉFENSIF (USD) : borne max de repli appliquée UNIQUEMENT si le plafond
 // de l'opérateur (active-conf PAYOUT) est indisponible/illisible — pour ne jamais

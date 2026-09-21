@@ -25,10 +25,10 @@ describe('splitAmount', () => {
 // (PAYOUT_MIN_AMOUNT=5, PAYOUT_MAX_AMOUNT=2000, USD_TO_CDF_RATE=2250).
 describe('payoutBounds', () => {
   it('USD : bornes USD inchangées', () => {
-    expect(payoutBounds('USD')).toEqual({ min: 5, max: 2000 });
+    expect(payoutBounds('USD')).toEqual({ min: 2, max: 2000 });
   });
 
   it('CDF : bornes = bornes USD × taux (entiers)', () => {
-    expect(payoutBounds('CDF')).toEqual({ min: 11250, max: 4500000 });
+    expect(payoutBounds('CDF')).toEqual({ min: 4500, max: 4500000 });
   });
 });

@@ -7,8 +7,10 @@ import {
   USD_TO_CDF_RATE,
 } from 'src/common/constants';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
+import { payoutBounds } from 'src/common/money';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const MATURATION_MS = PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
 
 // Quantifie un montant dans sa devise : CDF en entiers (PawaPay refuse les
 // décimales), USD à 2 décimales.
@@ -55,11 +57,18 @@ export class EarningsService {
         soldGroups.some((g) => g.currency === c),
     );
 
+    const cutoff = new Date(Date.now() - MATURATION_MS);
+
     const balances = await Promise.all(
       currencies.map(async (currency) => {
         const bal = balanceGroups.find((g) => g.currency === currency);
         const sold = soldGroups.find((g) => g.currency === currency);
         const { withdrawable } = await this.getWithdrawable(userId, currency);
+        const { maturingAmount, nextMaturesAt } = await this.getNextMaturation(
+          userId,
+          currency,
+          cutoff,
+        );
         return {
           currency,
           balance: quantize(bal?._sum.amount ?? 0, currency),
@@ -67,11 +76,45 @@ export class EarningsService {
           commission: quantize(sold?._sum.platformFee ?? 0, currency),
           net: quantize(sold?._sum.organizerAmount ?? 0, currency),
           withdrawable,
+          // Seuil minimum de retrait DANS cette devise (front : « Retrait dès X »).
+          minWithdrawal: payoutBounds(currency).min,
+          // Fonds encore en maturation + date de déblocage de la plus ancienne
+          // vente non maturée (front : « le reste dispo le … »). null si tout est mûr.
+          maturingAmount,
+          nextMaturesAt,
         };
       }),
     );
 
     return { balances };
+  }
+
+  // Fonds de vente PAS ENCORE maturés d'une devise (createdAt > cutoff) : leur
+  // montant + la date de maturation de la PLUS ANCIENNE vente en attente
+  // (createdAt + délai). Sert l'affichage « le reste dispo le … » côté wallet.
+  private async getNextMaturation(
+    userId: string,
+    currency: $Enums.Currency,
+    cutoff: Date,
+  ): Promise<{ maturingAmount: number; nextMaturesAt: string | null }> {
+    const pending = await this.prisma.ledgerEntry.aggregate({
+      _sum: { amount: true },
+      _min: { createdAt: true },
+      where: {
+        userId,
+        account: 'ORGANIZER',
+        type: 'SALE_ORGANIZER',
+        currency,
+        createdAt: { gt: cutoff },
+      },
+    });
+    const earliest = pending._min.createdAt;
+    return {
+      maturingAmount: quantize(pending._sum.amount ?? 0, currency),
+      nextMaturesAt: earliest
+        ? new Date(earliest.getTime() + MATURATION_MS).toISOString()
+        : null,
+    };
   }
 
   // Solde RETIRABLE d'UNE devise (≠ solde total créance). Seules les ventes

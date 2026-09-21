@@ -85,14 +85,14 @@ describe('PayoutsService', () => {
     });
 
     it('CDF : montant arrondi à l\'entier, retrait dans la devise choisie', async () => {
-      // Bornes CDF (payoutBounds) = bornes USD × taux figé = [11250, 4500000].
+      // Bornes CDF (payoutBounds) = bornes USD × taux figé = [4500, 4500000].
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 250000 });
       const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 150000.7, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
       expect(earnings.getWithdrawable).toHaveBeenCalledWith('org-1', 'CDF');
       expect(res).toEqual({ tempToken: 'temp.jwt', currency: 'CDF', amount: 150001 });
     });
 
-    it('CDF : montant dans les bornes CDF (250 000, ∈ [11250, 4500000]) n\'est PAS rejeté pour cause de borne', async () => {
+    it('CDF : montant dans les bornes CDF (250 000, ∈ [4500, 4500000]) n\'est PAS rejeté pour cause de borne', async () => {
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 300000 });
       const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 250000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
       expect(res.amount).toBe(250000);
@@ -105,10 +105,10 @@ describe('PayoutsService', () => {
       ).rejects.toThrow('CDF');
     });
 
-    it('CDF : refuse un montant < borne min CDF (10 000)', async () => {
+    it('CDF : refuse un montant < borne min CDF (4500)', async () => {
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 300000 });
       await expect(
-        service.requestPayout('org-1', { currency: 'CDF', amount: 10000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+        service.requestPayout('org-1', { currency: 'CDF', amount: 3000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
       ).rejects.toThrow(BadRequestException);
     });
   });
