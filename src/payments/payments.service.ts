@@ -235,42 +235,57 @@ export class PaymentsService {
 
   // Paiement refusé : commandes PENDING → FAILED + stock relâché. Les commandes
   // EXPIRED ont déjà relâché leur stock (reaper) : simple passage FAILED.
+  //
+  // Idempotent sous concurrence (callback + poll auto-vérifiant + reaper peuvent
+  // résoudre le MÊME paymentRef en parallèle) : la transition d'état est faite par
+  // un `updateMany` CONDITIONNEL (`paymentStatus: 'PENDING'`). Le verrou de ligne
+  // Postgres sérialise les appelants ; seul celui dont `count === 1` a réellement
+  // effectué la transition relâche le stock → jamais de double décrément. On ne se
+  // fie donc PAS au statut du snapshot `order` (potentiellement périmé).
   private async fail(orders: OrderWithEvent[]): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       for (const order of orders) {
-        if (order.paymentStatus === 'PENDING') {
+        const { count } = await tx.order.updateMany({
+          where: { id: order.id, paymentStatus: 'PENDING' },
+          data: { paymentStatus: 'FAILED' },
+        });
+        if (count === 1) {
+          // Nous seuls avons fait passer cette commande de PENDING à FAILED :
+          // relâchement du stock réservé, exactement une fois.
           await tx.$executeRaw`
           UPDATE "TicketCategory"
           SET "soldCount" = "soldCount" - ${order.quantity}
           WHERE "id" = ${order.ticketCategoryId}`;
-          await tx.order.update({
-            where: { id: order.id },
-            data: { paymentStatus: 'FAILED' },
-          });
-        } else if (order.paymentStatus === 'EXPIRED') {
-          await tx.order.update({
-            where: { id: order.id },
-            data: { paymentStatus: 'FAILED' },
-          });
+          continue;
         }
+        // Sinon : une commande EXPIRED (stock déjà relâché par le reaper) passe
+        // FAILED sans re-relâcher. Les autres statuts (PAID/REVIEW/déjà FAILED)
+        // ne matchent aucun WHERE → laissés intacts.
+        await tx.order.updateMany({
+          where: { id: order.id, paymentStatus: 'EXPIRED' },
+          data: { paymentStatus: 'FAILED' },
+        });
       }
     });
   }
 
-  // Reaper : commandes PENDING abandonnées → EXPIRED + stock relâché. Les commandes
-  // déjà EXPIRED (stock déjà relâché) ou terminales sont ignorées.
+  // Reaper : commandes PENDING abandonnées → EXPIRED + stock relâché. Idempotent
+  // (même raisonnement que `fail`) : seul l'appelant dont l'`updateMany`
+  // PENDING→EXPIRED a `count === 1` relâche le stock. Les commandes déjà EXPIRED
+  // (stock déjà relâché) ou terminales ne matchent pas → ignorées.
   private async expire(orders: OrderWithEvent[]): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       for (const order of orders) {
-        if (order.paymentStatus !== 'PENDING') continue;
-        await tx.$executeRaw`
-        UPDATE "TicketCategory"
-        SET "soldCount" = "soldCount" - ${order.quantity}
-        WHERE "id" = ${order.ticketCategoryId}`;
-        await tx.order.update({
-          where: { id: order.id },
+        const { count } = await tx.order.updateMany({
+          where: { id: order.id, paymentStatus: 'PENDING' },
           data: { paymentStatus: 'EXPIRED' },
         });
+        if (count === 1) {
+          await tx.$executeRaw`
+          UPDATE "TicketCategory"
+          SET "soldCount" = "soldCount" - ${order.quantity}
+          WHERE "id" = ${order.ticketCategoryId}`;
+        }
       }
     });
   }

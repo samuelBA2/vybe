@@ -31,7 +31,7 @@ describe('PaymentsService.handleWebhook', () => {
     $executeRaw: jest.Mock;
     ticket: { createMany: jest.Mock };
     ledgerEntry: { createMany: jest.Mock };
-    order: { update: jest.Mock };
+    order: { update: jest.Mock; updateMany: jest.Mock };
   };
   let prisma: {
     paymentProviderLog: { create: jest.Mock };
@@ -105,7 +105,12 @@ describe('PaymentsService.handleWebhook', () => {
       $executeRaw: jest.fn().mockResolvedValue(1),
       ticket: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       ledgerEntry: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      order: { update: jest.fn().mockResolvedValue({}) },
+      order: {
+        update: jest.fn().mockResolvedValue({}),
+        // Par défaut la transition conditionnelle affecte 1 ligne (l'appelant fait
+        // réellement passer la commande de PENDING à son état terminal).
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     prisma = {
       paymentProviderLog: { create: jest.fn().mockResolvedValue({}) },
@@ -245,11 +250,25 @@ describe('PaymentsService.handleWebhook', () => {
     const res = await service.handleWebhook(rawBody, headers);
 
     expect(tx.$executeRaw).toHaveBeenCalled(); // décrément du stock réservé
-    expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ paymentStatus: 'FAILED' }),
-    }));
+    // Transition conditionnelle et idempotente PENDING→FAILED (garde de concurrence).
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', paymentStatus: 'PENDING' },
+      data: { paymentStatus: 'FAILED' },
+    });
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
     expect(res).toEqual(expect.objectContaining({ status: 'FAILED' }));
+  });
+
+  it('refusé mais commande déjà résolue en concurrence (updateMany count=0) → PAS de double relâchement de stock', async () => {
+    mockCheck('FAILED');
+    // Un autre appelant (callback/poll/reaper) a déjà fait la transition : notre
+    // updateMany PENDING→FAILED n'affecte aucune ligne → le stock ne doit PAS être décrémenté.
+    tx.order.updateMany.mockResolvedValue({ count: 0 });
+    const { rawBody, headers } = webhook();
+
+    await service.handleWebhook(rawBody, headers);
+
+    expect(tx.$executeRaw).not.toHaveBeenCalled(); // aucun décrément de stock
   });
 
   it('divergence de montant (checkStatus ≠ Σ chargedAmount) → REVIEW, sans billets ni ledger', async () => {
@@ -285,11 +304,20 @@ describe('PaymentsService.handleWebhook', () => {
       mockCheck('PROCESSING');
       const res = await service.resolvePayment(PAYMENT_REF, { expireStale: true });
       expect(tx.$executeRaw).toHaveBeenCalled(); // décrément du stock réservé
-      expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({ paymentStatus: 'EXPIRED' }),
-      }));
+      // Transition conditionnelle et idempotente PENDING→EXPIRED (garde de concurrence).
+      expect(tx.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', paymentStatus: 'PENDING' },
+        data: { paymentStatus: 'EXPIRED' },
+      });
       expect(tx.ticket.createMany).not.toHaveBeenCalled();
       expect(res).toEqual(expect.objectContaining({ status: 'EXPIRED' }));
+    });
+
+    it('expiration en concurrence (updateMany count=0) → PAS de double relâchement de stock', async () => {
+      mockCheck('PROCESSING');
+      tx.order.updateMany.mockResolvedValue({ count: 0 }); // déjà expirée/résolue ailleurs
+      await service.resolvePayment(PAYMENT_REF, { expireStale: true });
+      expect(tx.$executeRaw).not.toHaveBeenCalled(); // aucun décrément de stock
     });
 
     it('payé tardivement (COMPLETED) → re-honore en PAID + billets + ledger', async () => {
