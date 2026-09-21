@@ -95,7 +95,7 @@ export const PAWAPAY_OPERATORS_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 // retirables — laisse le temps au prefunding PawaPay (RDC ≈ T+5 j ouvrés) et
 // couvre une fenêtre remboursement/litige.
 export const PAYOUT_MATURATION_DAYS = Number(
-  process.env.PAYOUT_MATURATION_DAYS ?? 6,
+  process.env.PAYOUT_MATURATION_DAYS ?? 4,
 );
 
 // Plancher métier d'un retrait (USD). La borne réelle = max(ce plancher,
