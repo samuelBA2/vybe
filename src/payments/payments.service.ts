@@ -32,7 +32,7 @@ type OrderWithEvent = {
   organizerAmount: number;
   platformFee: number;
   currency: $Enums.Currency;
-  paymentStatus: string;
+  paymentStatus: $Enums.PaymentStatus;
   ticketCategory: { event: { id: string; endDate: Date; createdById: string } };
 };
 
@@ -148,6 +148,13 @@ export class PaymentsService {
   // Transition PAID atomique de toutes les commandes du checkout. Idempotent :
   // les commandes déjà PAID sont ignorées. Une commande EXPIRED (stock relâché par
   // le reaper) est re-honorée si le stock est de nouveau disponible, sinon REVIEW.
+  //
+  // Idempotent sous concurrence (callback + poll auto-vérifiant + reaper peuvent
+  // résoudre le MÊME paymentRef en parallèle) : la transition vers PAID est un
+  // `updateMany` CONDITIONNEL sur le statut attendu. Le verrou de ligne Postgres
+  // sérialise les appelants ; seul celui dont `count === 1` a effectué la transition
+  // émet billets + ledger (via `settle`). Sans cette garde, deux résolutions
+  // concurrentes créeraient des billets EN DOUBLE et créditeraient le ledger DEUX FOIS.
   private async fulfill(orders: OrderWithEvent[]): Promise<WebhookOutcome> {
     let outcome: WebhookOutcome = 'PAID';
     await this.prisma.$transaction(async (tx) => {
@@ -155,38 +162,56 @@ export class PaymentsService {
         if (order.paymentStatus === 'PAID') continue; // déjà honorée (idempotence)
 
         if (order.paymentStatus === 'EXPIRED') {
-          // Le reaper a relâché le stock : tenter de le re-réserver.
+          // Claim atomique EXPIRED→PAID : un seul appelant concurrent gagne.
+          const { count } = await tx.order.updateMany({
+            where: { id: order.id, paymentStatus: 'EXPIRED' },
+            data: { paymentStatus: 'PAID' },
+          });
+          if (count === 0) continue; // déjà honorée/traitée par un autre appelant
+          // On a claimé : re-réserver le stock relâché par le reaper.
           const affected = await tx.$executeRaw`
           UPDATE "TicketCategory"
           SET "soldCount" = "soldCount" + ${order.quantity}
           WHERE "id" = ${order.ticketCategoryId}
           AND ("totalStock" IS NULL OR "soldCount" + ${order.quantity} <= "totalStock")`;
           if (affected === 0) {
-            // Stock repris entre-temps : paiement accepté non honorable → REVIEW.
-            await tx.order.update({
-              where: { id: order.id },
+            // Stock repris entre-temps : paiement accepté non honorable → REVIEW
+            // (on annule notre claim PAID posé juste au-dessus).
+            await tx.order.updateMany({
+              where: { id: order.id, paymentStatus: 'PAID' },
               data: { paymentStatus: 'REVIEW' },
             });
             outcome = 'REVIEW';
             continue;
           }
-        } else if (order.paymentStatus !== 'PENDING') {
-          // Statut inattendu (FAILED…) pour un paiement confirmé : à résoudre.
-          await tx.order.update({
-            where: { id: order.id },
+        } else if (order.paymentStatus === 'PENDING') {
+          // Claim atomique PENDING→PAID : un seul appelant concurrent gagne.
+          const { count } = await tx.order.updateMany({
+            where: { id: order.id, paymentStatus: 'PENDING' },
+            data: { paymentStatus: 'PAID' },
+          });
+          if (count === 0) continue; // déjà honorée en concurrence → pas de double émission
+        } else {
+          // Statut inattendu (FAILED/REVIEW…) pour un paiement confirmé : à résoudre.
+          await tx.order.updateMany({
+            where: { id: order.id, paymentStatus: order.paymentStatus },
             data: { paymentStatus: 'REVIEW' },
           });
           outcome = 'REVIEW';
           continue;
         }
 
+        // Claim gagné (statut déjà passé à PAID) → émettre billets + ledger
+        // EXACTEMENT une fois.
         await this.settle(tx, order);
       }
     });
     return outcome;
   }
 
-  // Honore UNE commande : billets + 2 écritures ledger + passage PAID.
+  // Émet billets + 2 écritures ledger pour UNE commande dont la transition vers
+  // PAID vient d'être remportée par l'appelant (le claim conditionnel de `fulfill`).
+  // Ne touche PLUS au statut : c'est le claim qui l'a passé à PAID (garde d'unicité).
   private async settle(
     tx: Prisma.TransactionClient,
     order: OrderWithEvent,
@@ -225,11 +250,6 @@ export class PaymentsService {
           eventId: event.id,
         },
       ],
-    });
-
-    await tx.order.update({
-      where: { id: order.id },
-      data: { paymentStatus: 'PAID' },
     });
   }
 

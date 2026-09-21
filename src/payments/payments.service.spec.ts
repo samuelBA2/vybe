@@ -175,13 +175,26 @@ describe('PaymentsService.handleWebhook', () => {
       expect.objectContaining({ account: 'PLATFORM', type: 'SALE_PLATFORM', userId: 'organizer-1', amount: 30, currency: 'USD', orderId: 'order-1', eventId: 'ev-1' }),
     ]));
 
-    // Commande passée PAID.
-    expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'order-1' },
-      data: expect.objectContaining({ paymentStatus: 'PAID' }),
-    }));
+    // Commande passée PAID via claim conditionnel PENDING→PAID (garde de concurrence).
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', paymentStatus: 'PENDING' },
+      data: { paymentStatus: 'PAID' },
+    });
 
     expect(res).toEqual(expect.objectContaining({ paymentRef: PAYMENT_REF, status: 'PAID' }));
+  });
+
+  it('payé mais commande déjà honorée en concurrence (claim count=0) → PAS de billets ni ledger en double', async () => {
+    // Un autre appelant (callback/poll/reaper) a déjà fait passer la commande à PAID :
+    // notre claim PENDING→PAID n'affecte aucune ligne → aucune émission.
+    tx.order.updateMany.mockResolvedValue({ count: 0 });
+    mockCheck('COMPLETED', '200');
+    const { rawBody, headers } = webhook();
+
+    await service.handleWebhook(rawBody, headers);
+
+    expect(tx.ticket.createMany).not.toHaveBeenCalled();
+    expect(tx.ledgerEntry.createMany).not.toHaveBeenCalled();
   });
 
   it('CDF : ledger écrit dans la devise de la commande (pas USD hard-codé)', async () => {
@@ -206,7 +219,7 @@ describe('PaymentsService.handleWebhook', () => {
 
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
     expect(tx.ledgerEntry.createMany).not.toHaveBeenCalled();
-    expect(tx.order.update).not.toHaveBeenCalled();
+    expect(tx.order.updateMany).not.toHaveBeenCalled();
     expect(res).toEqual(expect.objectContaining({ paymentRef: PAYMENT_REF }));
   });
 
@@ -221,9 +234,10 @@ describe('PaymentsService.handleWebhook', () => {
     expect(tx.$executeRaw).toHaveBeenCalled(); // re-réservation de stock
     expect(tx.ticket.createMany).toHaveBeenCalledTimes(1);
     expect(tx.ledgerEntry.createMany).toHaveBeenCalledTimes(1);
-    expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ paymentStatus: 'PAID' }),
-    }));
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', paymentStatus: 'EXPIRED' },
+      data: { paymentStatus: 'PAID' },
+    });
     expect(res).toEqual(expect.objectContaining({ status: 'PAID' }));
   });
 
@@ -237,9 +251,10 @@ describe('PaymentsService.handleWebhook', () => {
 
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
     expect(tx.ledgerEntry.createMany).not.toHaveBeenCalled();
-    expect(tx.order.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ paymentStatus: 'REVIEW' }),
-    }));
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', paymentStatus: 'PAID' },
+      data: { paymentStatus: 'REVIEW' },
+    });
     expect(res).toEqual(expect.objectContaining({ status: 'REVIEW' }));
   });
 
