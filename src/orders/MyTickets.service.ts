@@ -50,8 +50,11 @@ export class MyTicketsService {
 
     return this.prisma.ticket.findMany({
     where: {
-        // Les billets offerts ont leur propre onglet (getMyGifts) : jamais dans upcoming/past.
-        order: { userId, paymentStatus: { not: 'GIFT' } },
+        // Seuls les billets d'une commande PAYÉE apparaissent ici. Exclut les GIFT
+        // (onglet dédié getMyGifts) ET tout billet dont la commande ne serait pas
+        // (ou plus) PAID — durci depuis le vrai flux de paiement (PENDING/EXPIRED/
+        // REVIEW n'ont pas de billet, mais on verrouille l'invariant côté requête).
+        order: { userId, paymentStatus: 'PAID' },
         OR: [
         { qrStatus: { not: QRStatus.CANCELLED } },
         { cancelledAt: { gte: cutoff } },

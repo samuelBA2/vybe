@@ -174,6 +174,45 @@ export class OtpService {
     }
   }
 
+  // ─── Retrait (payout) organisateur (avec cooldown resend + blocage) ──────────
+
+  async sendPayoutEmailOtp(email: string): Promise<void> {
+    await this.checkBlock(email);
+    await this.checkResendCooldown(email);
+    const otp = this.generateOtp();
+    await this.persistOtp(email, otp);
+    try {
+      await this.mailService.sendAccountDeletionOtp(email, otp); // réutilise le gabarit « code de sécurité »
+    } catch (error) {
+      this.logger.error(
+        `Erreur envoi code retrait à ${email}: ${(error as Error).message}`,
+      );
+      throw new InternalServerErrorException(
+        "Impossible d'envoyer le code de sécurité. Veuillez réessayer plus tard.",
+      );
+    }
+  }
+
+  async sendPayoutPhoneOtp(phone: string): Promise<void> {
+    await this.checkBlock(phone);
+    await this.checkResendCooldown(phone);
+    const otp = this.generateOtp();
+    await this.persistOtp(phone, otp);
+    try {
+      await this.smsService.sendOtp(
+        phone,
+        `Vybe : confirmez votre retrait. Code de sécurité : ${otp}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erreur envoi code retrait à ${phone}: ${(error as Error).message}`,
+      );
+      throw new InternalServerErrorException(
+        "Impossible d'envoyer le code de sécurité. Veuillez réessayer plus tard.",
+      );
+    }
+  }
+
   // ─── Vérification OTP ────────────────────────────────────────────────────────
 
   async verifyOtp(identifier: string, code: string): Promise<void> {

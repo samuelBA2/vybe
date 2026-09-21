@@ -153,6 +153,14 @@ model LedgerEntry {
 Back-relation `ledgerEntries LedgerEntry[]` sur `User`. Solde organisateur =
 `SUM(amount) WHERE userId=X AND account=ORGANIZER`.
 
+**Décision (2026-09-14) — `userId` de la ligne `SALE_PLATFORM` (Option A).** `userId` étant
+obligatoire et « la plateforme » n'étant pas un `User`, la ligne `PLATFORM` porte le **`userId` de
+l'organisateur** de l'événement, distinguée par `account=PLATFORM`. Conséquences : le solde
+organisateur (filtre `account=ORGANIZER`) n'est pas affecté ; le revenu plateforme = `SUM(account=
+PLATFORM)` quel que soit le `userId` ; on conserve la traçabilité (quel organisateur a généré la
+commission). Pas de user système ni d'env à ajouter en V1 ; migration possible vers un user
+« plateforme » dédié plus tard si besoin.
+
 ### `PaymentProviderLog` — audit (séparé du ledger)
 ```prisma
 model PaymentProviderLog {
