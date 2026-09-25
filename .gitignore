@@ -76,3 +76,9 @@ docs/passation.md
 
 # Documents légaux (non versionnés)
 docs/legal/
+
+# Outillage local Claude Code
+.claude/
+
+# Docs de conception / passation internes (non versionnés)
+DesignGoogleLogin.md
