@@ -54,7 +54,16 @@ describe('EventsService.createEvent', () => {
         findUnique: jest.fn().mockResolvedValue(null),
       },
       // Les médias soumis sont marqués "attachés" pour échapper à la purge.
-      uploadedAsset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      uploadedAsset: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        // Par défaut, tous les fichiers soumis sont "possédés" (uploadés via
+        // /uploads par le créateur) → la validation d'appartenance passe. Les
+        // tests de rejet surchargent findMany pour simuler une URL fantôme.
+        findMany: jest.fn().mockImplementation(({ where }: any) => {
+          const urls = where?.url?.in ?? [];
+          return Promise.resolve(urls.map((url: string) => ({ url })));
+        }),
+      },
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };
@@ -165,6 +174,27 @@ describe('EventsService.createEvent', () => {
     expect(createArg.data.priceCurrency).toBe('CDF');
   });
 
+  it("refuse un ticketDesignUrl qui ne correspond à aucun upload du créateur", async () => {
+    // Le média (poster) est possédé, mais le design VIP est une URL fantôme
+    // (jamais uploadée) → à l'origine du bandeau noir des billets téléchargés.
+    prisma.uploadedAsset.findMany.mockResolvedValue([{ url: 'https://cdn/a.png' }]);
+
+    await expect(service.createEvent('user-1', baseDto())).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(prisma.event.create).not.toHaveBeenCalled();
+  });
+
+  it("refuse un média (affiche) qui ne correspond à aucun upload du créateur", async () => {
+    // Le design est possédé, mais l'URL du média (poster) est fantôme.
+    prisma.uploadedAsset.findMany.mockResolvedValue([{ url: 'https://cdn/vip.png' }]);
+
+    await expect(service.createEvent('user-1', baseDto())).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(prisma.event.create).not.toHaveBeenCalled();
+  });
+
   describe('contrat carte (createdById + giftedCount)', () => {
     // Garde : findOne n'a aucun `select` restrictif (include complet), donc
     // createdById (scalaire Event) et giftedCount (scalaire TicketCategory)
@@ -210,7 +240,16 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
         // Référence unique : aucune collision → 1re tentative acceptée.
         findUnique: jest.fn().mockResolvedValue(null),
       },
-      uploadedAsset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      uploadedAsset: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        // Par défaut, tous les fichiers soumis sont "possédés" (uploadés via
+        // /uploads par le créateur) → la validation d'appartenance passe. Les
+        // tests de rejet surchargent findMany pour simuler une URL fantôme.
+        findMany: jest.fn().mockImplementation(({ where }: any) => {
+          const urls = where?.url?.in ?? [];
+          return Promise.resolve(urls.map((url: string) => ({ url })));
+        }),
+      },
     };
     mail = { sendEventModerationEmail: jest.fn().mockResolvedValue(undefined) };
     moderation = { generateModerationToken: jest.fn().mockReturnValue('tok') };

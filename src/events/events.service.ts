@@ -202,6 +202,26 @@ export class EventsService {
       }
       eventCapacity = dto.totalCapacity;
     }
+    // ── Anti-URL fantôme : chaque fichier référencé (médias + designs de
+    // billets) doit correspondre à un upload réel du créateur (via /uploads).
+    // Sans ça, une URL syntaxiquement valide mais inexistante (404 Cloudinary)
+    // est stockée, et le billet téléchargé retombe sur le fond neutre sombre.
+    const requiredUrls = [
+      ...dto.media.map((m) => m.url),
+      ...dto.ticketCategories.map((t) => t.ticketDesignUrl),
+    ];
+    const owned = await this.prisma.uploadedAsset.findMany({
+      where: { ownerId: userId, url: { in: requiredUrls } },
+      select: { url: true },
+    });
+    const ownedUrls = new Set(owned.map((a) => a.url));
+    const missing = requiredUrls.filter((u) => !ownedUrls.has(u));
+    if (missing.length) {
+      throw new BadRequestException(
+        `Fichier(s) introuvable(s) parmi vos uploads : ${missing.join(', ')}. Uploadez-les via /uploads avant de créer l'événement.`,
+      );
+    }
+
      // ── Référence publique unique (ex. "VYBE-XXXXX")
     const reference = await this.generateUniqueReference();
 
