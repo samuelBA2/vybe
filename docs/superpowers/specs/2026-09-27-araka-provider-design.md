@@ -193,9 +193,62 @@ Render redéploie le service (quelques minutes).
 débit**, un opérateur sans `payoutAvailable` (ex. `AFRIMONEY`). Sans ce verrou, l'exception de
 `initPayout` surviendrait après le débit et laisserait le retrait bloqué en `PENDING`.
 
+## Idempotence
+
+ARAKA **ne déduplique pas** les références (vérifié en sandbox), contrairement à PawaPay
+(`DUPLICATE_IGNORED`). L'idempotence est donc garantie **côté Vybe**.
+
+**I1 — `POST /order` (double clic, renvoi réseau).** En-tête optionnel `Idempotency-Key` (UUID v4,
+généré par le front). Nouvelle table :
+
+```prisma
+model CheckoutRequest {
+  id          String   @id @default(uuid())
+  userId      String
+  key         String
+  fingerprint String   // sha256 du panier trié + opérateur + numéro
+  paymentRef  String
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, key])
+  @@index([createdAt])
+}
+```
+
+- Clé reçue et déjà connue pour cet utilisateur : même empreinte → on renvoie l'état du checkout
+  existant (`getPaymentStatus`, même `paymentRef`), **sans** réserver de stock, ni appliquer V2/V3,
+  ni appeler ARAKA ; empreinte différente → `422` « Clé d'idempotence déjà utilisée pour une autre
+  commande. »
+- Clé nouvelle : la ligne `CheckoutRequest` est créée **dans la même transaction** que la
+  réservation de stock et les commandes. Deux requêtes concurrentes avec la même clé : la seconde
+  échoue sur la contrainte unique (`P2002`) après le commit de la première → sa transaction est
+  annulée (stock rendu) et elle renvoie l'état du checkout gagnant.
+- Clé absente : comportement actuel (compatibilité le temps de déployer le front).
+- Clé mal formée (pas un UUID) : `400`.
+- Purge : le reaper supprime les `CheckoutRequest` de plus de 24 h.
+- Front : clé générée à l'ouverture de l'étape paiement, **régénérée** dès que le panier,
+  l'opérateur ou le numéro change, et après une réponse 4xx (une correction = nouvelle commande) ;
+  conservée seulement en cas d'échec réseau / 5xx.
+- Migration écrite à la main (`CREATE TABLE` + index) et appliquée par `prisma migrate deploy`
+  (build Render) — **jamais** `migrate dev` sur la base Neon partagée.
+
+**I2 — Validation de retrait (`POST /me/payouts/verify`, double soumission).** `verifyOtp` lit
+puis marque l'OTP en deux temps : deux appels simultanés passent. Le `tempToken` de retrait porte
+désormais un `jti` (UUID) ; `verifyPayout` le consomme via `UsedToken` (clé primaire) **dans la
+transaction du débit**. Second appel → `P2002` → transaction annulée → `409` « Ce retrait a déjà été
+validé. », aucun débit ni `sendmobilemoney`. Token sans `jti` → `401`. Aucune migration (table
+`UsedToken` existante).
+
+**I3 — Une référence n'est envoyée qu'une fois.** `paymentrequest` / `sendmobilemoney` ne sont
+jamais rejoués, même après un timeout (V1 : on attend le statut). Seul rejeu : après un `401`
+(requête non traitée par ARAKA), via re-login.
+
+**I4 — Callback / polling / reaper concurrents.** Déjà idempotents (transitions conditionnelles
+`PENDING→PAID/FAILED/EXPIRED`, claim `count === 1`) : inchangé.
+
 ## Flux
 
-**Achat (inchangé pour le front).**
+**Achat (contrat inchangé ; en-tête `Idempotency-Key` en plus).**
 1. `POST /order` → réservation de stock + commandes `PENDING` avec `paymentRef` court →
    `initPayment` → `202 ACCEPTED` → réponse `PENDING` ; `providerTxnId` = `transactionId` ARAKA.
 2. L'acheteur valide sur son téléphone.
@@ -282,9 +335,13 @@ Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASS
   reste `PENDING` sans relâcher le stock ; V2 : 4e initiation sur un même numéro en 10 min → 429 ;
   V3 : 3e checkout `PENDING` → 429 ; V4 : préfixe incohérent → 400 sans réservation de stock),
   `payments.cleanup.spec` (V1 : exception > 24 h → `EXPIRED` ; < 24 h → inchangé).
-- Vérification finale : suite complète verte (`npm run test`), lint sans `--fix`
-  (`npx eslint`), puis essai manuel sandbox en local via ngrok (numéros succès `+24381000000{1,2}`
-  et échec `+24381000000{3,4}`), callback inspecté sur `localhost:4040`.
+- Idempotence : `Order.service.spec` (I1 : même clé → même `paymentRef`, un seul `initPayment`,
+  aucune nouvelle réservation ; clé + autre panier → 422 ; course sur la clé (P2002) → réponse du
+  gagnant) ; `payouts.service.spec` (I2 : `jti` déjà consommé → 409, aucun débit ni `initPayout` ;
+  token sans `jti` → refusé).
+- Vérification finale : suite complète verte (`npm run test`), `tsc --noEmit`, lint sans `--fix`
+  (`npx eslint`), puis essai sur **staging Render** (webhook public) avec les numéros de test
+  ARAKA (succès `+24381000000{1,2}`, échec `+24381000000{3,4}`). Pas de tunnel local.
 
 ## Points en attente chez ProxyPay (ne bloquent pas l'implémentation)
 

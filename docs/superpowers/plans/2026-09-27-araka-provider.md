@@ -22,21 +22,21 @@
 - Codes opérateurs : `MPESA`, `ORANGE`, `AIRTEL`, `AFRIMONEY` (pas de retrait `AFRIMONEY`).
 - Commits : **sans** ligne `Co-Authored-By` (CLAUDE.md). Ne pas pousser (l'utilisateur pousse lui-même).
 - Lint : vérifier avec `npx eslint <fichiers>` (**jamais** `npm run lint`, qui fait `--fix` en masse).
+- Pas de tunnel local (ngrok) : vérification par les tests puis sur staging Render.
+- Migrations : SQL écrit à la main, appliqué par `prisma migrate deploy` (build Render) — **jamais** `prisma migrate dev` sur la base Neon partagée.
+- Idempotence garantie côté Vybe (ARAKA ne déduplique pas) : I1 `Idempotency-Key` sur `POST /order`, I2 `jti` consommé via `UsedToken` au retrait.
 - `@typescript-eslint/require-await` est actif : une méthode sans `await` ne doit pas être `async` (renvoyer `Promise.resolve(...)`).
 
 ---
 
-### Task 0: Branche de travail
+### Task 0: Branche de travail (déjà en place)
 
-- [ ] **Step 1: Créer la branche depuis `feat/payments`**
+La branche `feat/araka-provider` existe déjà : issue de `feat/payments`, elle porte la spec et ce plan. **Tout** le travail backend se fait dessus — jamais sur `main` ni sur `feat/payments`.
 
-```bash
-git checkout feat/payments
-```
+- [ ] **Step 1: Vérifier la branche**
 
-```bash
-git checkout -b feat/araka-provider
-```
+Run: `git branch --show-current`
+Expected: `feat/araka-provider`
 
 - [ ] **Step 2: Vérifier que la suite part verte**
 
@@ -2018,7 +2018,476 @@ git commit -m "feat(paiement): V2 anti-harcèlement USSD (limites par numéro/ut
 
 ---
 
-### Task 9: Nettoyage des mentions PawaPay, documentation, vérification finale
+### Task 9: I1 — idempotence de `POST /order` (`Idempotency-Key`)
+
+**Files:**
+- Modify: `prisma/schema.prisma` (nouveau modèle `CheckoutRequest`)
+- Create: `prisma/migrations/20260928120000_checkout_request_idempotency/migration.sql`
+- Modify: `src/common/constants.ts`
+- Modify: `src/orders/Order.service.ts` (`createOrder`)
+- Modify: `src/orders/CreateOrder.controller.ts`
+- Modify: `src/payments/payments.cleanup.ts` (purge)
+- Test: `src/orders/Order.service.spec.ts`, `src/payments/payments.cleanup.spec.ts`
+
+**Interfaces:**
+- Consumes: `OrderService.getPaymentStatus(userId, paymentRef)` (existant), limites V2/V3 (Task 8).
+- Produces: `OrderService.createOrder(userId: string, dto: CreateOrderDto, idempotencyKey?: string)` ; en-tête HTTP `Idempotency-Key` (UUID v4, optionnel) sur `POST /order`.
+
+- [ ] **Step 1: Modèle Prisma**
+
+`prisma/schema.prisma`, après le modèle `Order` :
+```prisma
+// Idempotence de POST /order (I1) : une clé client (en-tête Idempotency-Key) =
+// un seul checkout. Rejouer la même clé renvoie le même paymentRef, sans nouvelle
+// réservation de stock ni nouveau push. ARAKA ne déduplique pas les références :
+// cette garantie est entièrement côté Vybe. Purgé après 24 h par le reaper.
+model CheckoutRequest {
+  id          String   @id @default(uuid())
+  userId      String
+  key         String
+  // sha256 du panier trié + opérateur + numéro : une clé réutilisée pour un autre
+  // panier est refusée (422).
+  fingerprint String
+  paymentRef  String
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, key])
+  @@index([createdAt]) // purge
+}
+```
+
+- [ ] **Step 2: Migration écrite à la main (jamais `migrate dev` sur la base partagée)**
+
+`prisma/migrations/20260928120000_checkout_request_idempotency/migration.sql` :
+```sql
+-- CreateTable
+CREATE TABLE "CheckoutRequest" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "fingerprint" TEXT NOT NULL,
+    "paymentRef" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "CheckoutRequest_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CheckoutRequest_userId_key_key" ON "CheckoutRequest"("userId", "key");
+
+-- CreateIndex
+CREATE INDEX "CheckoutRequest_createdAt_idx" ON "CheckoutRequest"("createdAt");
+```
+
+Vérifier, **sans toucher à aucune base**, que ce SQL correspond exactement au schéma :
+
+```bash
+git show HEAD:prisma/schema.prisma > "$TMPDIR/schema-before.prisma"
+```
+
+```bash
+npx prisma migrate diff --from-schema-datamodel "$TMPDIR/schema-before.prisma" --to-schema-datamodel prisma/schema.prisma --script
+```
+Expected: le même `CREATE TABLE` + les deux `CREATE INDEX` que `migration.sql`.
+
+Puis régénérer le client (aucun accès base) :
+
+Run: `npx prisma generate`
+Expected: « Generated Prisma Client ».
+
+La migration sera appliquée par `prisma migrate deploy` au build Render (Task 13). En local, tant qu'elle n'est pas appliquée, un `POST /order` **avec** clé échouera — les tests unitaires, eux, n'utilisent pas la base.
+
+- [ ] **Step 3: Écrire les tests qui échouent (`Order.service.spec.ts`)**
+
+Types des mocks : ajouter `checkoutRequest: { findUnique: jest.Mock };` au type de `prisma`, et `checkoutRequest: { create: jest.Mock };` au type de `tx`. Dans le `beforeEach` :
+```ts
+    // dans tx :
+      checkoutRequest: { create: jest.fn().mockResolvedValue({}) },
+    // dans prisma :
+      checkoutRequest: { findUnique: jest.fn().mockResolvedValue(null) },
+```
+
+Import à ajouter : `UnprocessableEntityException` (depuis `@nestjs/common`) et `import { Prisma } from '@prisma/client';`.
+
+Tests :
+```ts
+  describe('I1 : idempotence (Idempotency-Key)', () => {
+    const KEY = '4f1c6a8e-2b7d-4c3a-9e5f-1a2b3c4d5e6f';
+    const p2002 = () =>
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+      });
+    const pendingOrder = (paymentRef: string) => ({
+      id: 'order-1', paymentRef, paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 200,
+    });
+
+    it('nouvelle clé → CheckoutRequest créée DANS la transaction du checkout', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+
+      await service.createOrder('user-1', dto(), KEY);
+
+      const ref = tx.order.create.mock.calls[0][0].data.paymentRef;
+      expect(tx.checkoutRequest.create).toHaveBeenCalledWith({
+        data: { userId: 'user-1', key: KEY, fingerprint: expect.any(String), paymentRef: ref },
+      });
+    });
+
+    it('même clé + même panier → même paymentRef, aucune réservation ni initPayment de plus', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      await service.createOrder('user-1', dto(), KEY);
+      const { fingerprint, paymentRef } = tx.checkoutRequest.create.mock.calls[0][0].data;
+
+      prisma.checkoutRequest.findUnique.mockResolvedValue({ paymentRef, fingerprint });
+      prisma.order.findMany.mockResolvedValue([pendingOrder(paymentRef)]);
+      const res = await service.createOrder('user-1', dto(), KEY);
+
+      expect(res.paymentRef).toBe(paymentRef);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(provider.initPayment).toHaveBeenCalledTimes(1);
+    });
+
+    it('même clé + autre panier → 422', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      prisma.checkoutRequest.findUnique.mockResolvedValue({ paymentRef: 'VBX', fingerprint: 'autre-panier' });
+
+      await expect(service.createOrder('user-1', dto(), KEY)).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('clé mal formée → 400', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      await expect(service.createOrder('user-1', dto(), 'pas-un-uuid')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('course sur la même clé (P2002) → renvoie le checkout gagnant, sans initPayment', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      let fingerprint = '';
+      tx.checkoutRequest.create.mockImplementation(({ data }: any) => {
+        fingerprint = data.fingerprint;
+        return Promise.reject(p2002());
+      });
+      prisma.checkoutRequest.findUnique
+        .mockResolvedValueOnce(null) // 1er contrôle : clé encore inconnue
+        .mockImplementationOnce(() => Promise.resolve({ paymentRef: 'VBGAGNANT', fingerprint }));
+      prisma.order.findMany.mockResolvedValue([pendingOrder('VBGAGNANT')]);
+
+      const res = await service.createOrder('user-1', dto(), KEY);
+
+      expect(res.paymentRef).toBe('VBGAGNANT');
+      expect(provider.initPayment).not.toHaveBeenCalled();
+    });
+
+    it('sans clé → comportement inchangé (aucune CheckoutRequest)', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      await service.createOrder('user-1', dto());
+      expect(tx.checkoutRequest.create).not.toHaveBeenCalled();
+      expect(prisma.checkoutRequest.findUnique).not.toHaveBeenCalled();
+    });
+  });
+```
+
+`src/payments/payments.cleanup.spec.ts` : type `prisma` → `{ order: { findMany: jest.Mock }; checkoutRequest: { deleteMany: jest.Mock } }`, et dans le `beforeEach` :
+```ts
+    prisma = {
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+      checkoutRequest: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+```
+puis :
+```ts
+  it('I1 : purge les clés d’idempotence de plus de 24 h', async () => {
+    await service.reapExpiredPayments();
+    const where = prisma.checkoutRequest.deleteMany.mock.calls[0][0].where;
+    expect(where.createdAt.lt.getTime()).toBeLessThanOrEqual(Date.now() - 24 * 3_600_000);
+  });
+```
+
+- [ ] **Step 4: Lancer, vérifier l'échec**
+
+Run: `npx jest src/orders/Order.service.spec.ts src/payments/payments.cleanup.spec.ts`
+Expected: FAIL sur les tests I1 (paramètre ignoré, aucune `CheckoutRequest`, pas de purge).
+
+- [ ] **Step 5: Implémenter dans `OrderService`**
+
+`src/common/constants.ts`, après les constantes V2/V3 :
+```ts
+// I1 : durée de conservation des clés d'idempotence de POST /order.
+export const CHECKOUT_REQUEST_RETENTION_HOURS = 24;
+```
+
+`src/orders/Order.service.ts` — imports : ajouter `UnprocessableEntityException` à l'import `@nestjs/common`, puis
+```ts
+import { Prisma } from "@prisma/client";
+import { isUUID } from "class-validator";
+```
+
+Au-dessus de la classe (après `STATUS_RESOLVE_THROTTLE_MS`) :
+```ts
+// I1 : empreinte d'un panier. Une clé d'idempotence ne sert qu'à CE panier
+// (mêmes lignes, même opérateur, même numéro), indépendamment de l'ordre des lignes.
+function checkoutFingerprint(dto: CreateOrderDto): string {
+    const items = [...dto.items]
+        .sort((a, b) => a.ticketCategoryId.localeCompare(b.ticketCategoryId))
+        .map((i) => [i.ticketCategoryId, i.quantity]);
+    return createHash('sha256')
+        .update(JSON.stringify({ items, operator: dto.operator, phoneNumber: dto.phoneNumber }))
+        .digest('hex');
+}
+```
+
+Signature et début de `createOrder` :
+```ts
+    async createOrder(userId: string, dto: CreateOrderDto, idempotencyKey?: string){
+        // I1 : idempotence (double clic / renvoi réseau). Même clé + même panier =
+        // même checkout, renvoyé tel quel (ni stock, ni V2/V3, ni nouveau push).
+        let fingerprint: string | undefined;
+        if (idempotencyKey !== undefined) {
+            if (!isUUID(idempotencyKey, 4)) {
+                throw new BadRequestException('En-tête Idempotency-Key invalide (UUID attendu).');
+            }
+            fingerprint = checkoutFingerprint(dto);
+            const replay = await this.replayCheckout(userId, idempotencyKey, fingerprint);
+            if (replay) return replay;
+        }
+
+        const items = dto.items;
+```
+
+Dans la transaction de réservation, **en premier** (avant la boucle `for (const line of lines)`) :
+```ts
+                // I1 : la clé est réclamée DANS la transaction du checkout. Une requête
+                // concurrente avec la même clé échoue ici (P2002) après notre commit.
+                if (idempotencyKey !== undefined) {
+                    await tx.checkoutRequest.create({
+                        data: { userId, key: idempotencyKey, fingerprint: fingerprint!, paymentRef },
+                    });
+                }
+```
+
+Entourer ce `await this.prisma.$transaction(async (tx) => { … });` de réservation par :
+```ts
+        try {
+            await this.prisma.$transaction(async (tx) => {
+                // … (contenu existant + claim ci-dessus)
+            });
+        } catch (err) {
+            if (
+                idempotencyKey !== undefined &&
+                err instanceof Prisma.PrismaClientKnownRequestError &&
+                err.code === 'P2002'
+            ) {
+                // Course sur la même clé : l'autre requête a gagné ; notre transaction
+                // est annulée (stock rendu). On renvoie SON checkout.
+                const replay = await this.replayCheckout(userId, idempotencyKey, fingerprint!);
+                if (replay) return replay;
+            }
+            throw err;
+        }
+```
+
+Méthode privée (après `loadCheckoutOrders`) :
+```ts
+    // I1 : état du checkout déjà créé avec cette clé ; null si la clé est inconnue.
+    // Clé connue mais panier différent → 422 (jamais deux paniers sous une clé).
+    private async replayCheckout(userId: string, key: string, fingerprint: string) {
+        const existing = await this.prisma.checkoutRequest.findUnique({
+            where: { userId_key: { userId, key } },
+        });
+        if (!existing) return null;
+        if (existing.fingerprint !== fingerprint) {
+            throw new UnprocessableEntityException("Clé d'idempotence déjà utilisée pour une autre commande.");
+        }
+        return this.getPaymentStatus(userId, existing.paymentRef);
+    }
+```
+
+- [ ] **Step 6: Contrôleur**
+
+`src/orders/CreateOrder.controller.ts` : ajouter `Headers` à l'import `@nestjs/common`, et :
+```ts
+    @Post()
+    async create(
+        @Req() req,
+        @Body() dto: CreateOrderDto,
+        // I1 : optionnelle (compatibilité le temps de déployer le front).
+        @Headers('idempotency-key') idempotencyKey?: string,
+    ) {
+        return this.ordersService.createOrder(req.user.sub, dto, idempotencyKey)
+    }
+```
+
+- [ ] **Step 7: Purge dans le reaper**
+
+`src/payments/payments.cleanup.ts` : importer `CHECKOUT_REQUEST_RETENTION_HOURS` depuis `src/common/constants`, et au tout début de `reapExpiredPayments()` :
+```ts
+    // I1 : purge des clés d'idempotence périmées (un rejeu au-delà n'a plus de sens).
+    try {
+      await this.prisma.checkoutRequest.deleteMany({
+        where: {
+          createdAt: {
+            lt: new Date(Date.now() - CHECKOUT_REQUEST_RETENTION_HOURS * 3_600_000),
+          },
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Purge CheckoutRequest impossible : ${String(err)}`);
+    }
+```
+
+- [ ] **Step 8: Lancer, vérifier le succès**
+
+Run: `npm run test`
+Expected: PASS.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add prisma/schema.prisma prisma/migrations/20260928120000_checkout_request_idempotency src/common/constants.ts src/orders/Order.service.ts src/orders/Order.service.spec.ts src/orders/CreateOrder.controller.ts src/payments/payments.cleanup.ts src/payments/payments.cleanup.spec.ts
+git commit -m "feat(paiement): I1 — idempotence de POST /order (Idempotency-Key, table CheckoutRequest)"
+```
+
+---
+
+### Task 10: I2 — validation de retrait à usage unique (`jti` + `UsedToken`)
+
+**Files:**
+- Modify: `src/payments/payouts.service.ts` (`requestPayout`, `verifyPayout`)
+- Test: `src/payments/payouts.service.spec.ts`
+
+**Interfaces:**
+- Consumes: table `UsedToken` (existante, `jti` clé primaire).
+- Produces: `tempToken` de retrait portant `jti` ; `verifyPayout` → `409 ConflictException` si déjà validé.
+
+- [ ] **Step 1: Écrire les tests qui échouent**
+
+`src/payments/payouts.service.spec.ts` : `import { Prisma } from '@prisma/client';` et ajouter `ConflictException` à l'import `@nestjs/common`. Dans le `beforeEach` : ajouter au mock `prisma`
+```ts
+      usedToken: { create: jest.fn().mockResolvedValue({}) },
+```
+et `jti: 'jti-1'` au payload renvoyé par `jwt.verify`.
+
+Dans `describe('requestPayout'` :
+```ts
+    it('I2 : le tempToken porte un jti unique', async () => {
+      await service.requestPayout('org-1', {
+        currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
+      });
+      expect(jwt.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ jti: expect.any(String) }),
+        expect.anything(),
+      );
+    });
+```
+
+Dans le `describe` de `verifyPayout` (celui qui contient « débite le ledger ») :
+```ts
+    it('I2 : consomme le jti dans la transaction du débit', async () => {
+      await service.verifyPayout('org-1', '123456', 'temp.jwt');
+      expect(prisma.usedToken.create).toHaveBeenCalledWith({ data: { jti: 'jti-1' } });
+    });
+
+    it('I2 : jti déjà consommé (double soumission) → 409, aucun débit ni initPayout', async () => {
+      prisma.usedToken.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+      await expect(service.verifyPayout('org-1', '123456', 'temp.jwt')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+      expect(prisma.payout.create).not.toHaveBeenCalled();
+      expect(provider.initPayout).not.toHaveBeenCalled();
+    });
+
+    it('I2 : token sans jti → 401, aucun mouvement', async () => {
+      jwt.verify.mockReturnValue({
+        sub: 'org-1', type: 'payout', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
+      });
+      await expect(service.verifyPayout('org-1', '123456', 'temp.jwt')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+    });
+```
+
+- [ ] **Step 2: Lancer, vérifier l'échec**
+
+Run: `npx jest src/payments/payouts.service.spec.ts`
+Expected: FAIL sur les 4 tests I2.
+
+- [ ] **Step 3: Implémenter**
+
+`src/payments/payouts.service.ts` — imports : ajouter `ConflictException` à l'import `@nestjs/common` ; `import { randomUUID } from 'crypto';` ; `import { $Enums, Prisma } from '@prisma/client';` (remplace l'import de `$Enums` seul).
+
+Dans `requestPayout`, le payload signé gagne un `jti` :
+```ts
+    const tempToken = this.jwt.sign(
+      {
+        sub: userId,
+        type: 'payout',
+        // I2 : identifiant unique, consommé une seule fois à la validation.
+        jti: randomUUID(),
+        currency,
+        amount,
+        phoneNumber,
+        operator: dto.operator,
+      },
+      { expiresIn: '10m' },
+    );
+```
+
+Dans `verifyPayout` : ajouter `jti?: string;` au type de `payload`, puis après les deux contrôles `type` / `sub` :
+```ts
+    // I2 : un tempToken de retrait est à usage unique (jti consommé ci-dessous).
+    if (!payload.jti) throw new UnauthorizedException('Token invalide ou expiré.');
+    const jti = payload.jti;
+```
+
+Dans la transaction de débit, juste **après** `pg_advisory_xact_lock` :
+```ts
+      // I2 : consommation du jti DANS la transaction du débit. Une seconde
+      // validation concurrente échoue ici (P2002) → rollback, aucun débit.
+      await tx.usedToken.create({ data: { jti } });
+```
+
+Entourer ce `const payout = await this.prisma.$transaction(…)` par :
+```ts
+    // Seul payout.id est utilisé après la transaction.
+    let payout: { id: string };
+    try {
+      payout = await this.prisma.$transaction(async (tx) => {
+        // … (contenu existant + consommation du jti ci-dessus)
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Ce retrait a déjà été validé.');
+      }
+      throw err;
+    }
+```
+
+- [ ] **Step 4: Lancer, vérifier le succès**
+
+Run: `npx jest src/payments/payouts.service.spec.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/payments/payouts.service.ts src/payments/payouts.service.spec.ts
+git commit -m "fix(paiement): I2 — validation de retrait à usage unique (jti consommé dans la transaction du débit)"
+```
+
+---
+
+### Task 11: Nettoyage des mentions PawaPay, documentation, vérification finale
 
 **Files:**
 - Modify: commentaires de `src/common/constants.ts`, `src/common/money.ts`, `src/orders/Order.service.ts`, `src/payments/earnings.service.ts`, `src/payments/payment-provider.interface.ts`, `src/payments/payments.controller.ts`, `src/payments/payments.service.ts`, `src/payments/payouts.service.ts`
@@ -2065,7 +2534,7 @@ git commit -m "chore(paiement): retire les mentions PawaPay, documente la config
 
 ---
 
-### Task 10: Front — retrait filtré, contrôle du préfixe (repo `vybeFrontend`)
+### Task 12: Front — clé d'idempotence, retrait filtré, contrôle du préfixe (repo `vybeFrontend`)
 
 **Files (dans `/Users/user/vybeFrontend`):**
 - Modify: `src/types/api.ts` (`PaymentOperator`)
@@ -2078,11 +2547,76 @@ git commit -m "chore(paiement): retire les mentions PawaPay, documente la config
 - Consumes: `GET /payments/config` → opérateurs avec `payoutAvailable?: boolean`, `phonePrefixes?: string[]`.
 - Produces: `phoneMatchesOperator(normalized: string, op: PaymentOperator): boolean`.
 
-- [ ] **Step 1: Branche**
+- [ ] **Step 1: Branche (jamais depuis `main`)**
+
+Partir de la branche front qui porte le checkout Mobile Money actuel (celle déployée avec `feat/payments` — à confirmer avec l'utilisateur avant de commencer), puis :
 
 ```bash
 git -C /Users/user/vybeFrontend checkout -b feat/araka-operators
 ```
+
+- [ ] **Step 1b: I1 — envoyer une clé d'idempotence avec `POST /order`**
+
+`src/types/api.ts`, après `CreateOrderPayload` (et corriger son commentaire d'opérateur : `// code opérateur (ex. 'MPESA')`) :
+```ts
+/** Variables de la mutation d'achat : payload + clé d'idempotence (en-tête). */
+export type CreateOrderRequest = CreateOrderPayload & { idempotencyKey?: string };
+```
+
+`src/services/tickets.service.ts` :
+```ts
+  createOrder(
+    payload: CreateOrderPayload,
+    signal?: AbortSignal,
+    idempotencyKey?: string,
+  ): Promise<CreateOrderResponse> {
+    return api.post<CreateOrderResponse>("/order", payload, {
+      signal,
+      headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+    });
+  },
+```
+
+Test (dans `src/services/tickets.service.test.ts`, bloc `createOrder / getOrderStatus`) :
+```ts
+  it("createOrder transmet la clé d'idempotence en en-tête", async () => {
+    vi.mocked(api.post).mockResolvedValue({ paymentRef: "VB1" } as never);
+    const payload = { items: [{ ticketCategoryId: "c1", quantity: 1 }], operator: "MPESA", phoneNumber: "243810000001" };
+    await ticketsService.createOrder(payload, undefined, "4f1c6a8e-2b7d-4c3a-9e5f-1a2b3c4d5e6f");
+    expect(api.post).toHaveBeenCalledWith("/order", payload, {
+      signal: undefined,
+      headers: { "Idempotency-Key": "4f1c6a8e-2b7d-4c3a-9e5f-1a2b3c4d5e6f" },
+    });
+  });
+```
+
+`src/hooks/queries/use-tickets.ts`, dans `useCreateOrder` :
+```ts
+  return useMutation<CreateOrderResponse, ApiError, CreateOrderRequest>({
+    mutationFn: ({ idempotencyKey, ...payload }) =>
+      ticketsService.createOrder(payload, undefined, idempotencyKey),
+```
+(importer `CreateOrderRequest`).
+
+`src/components/vybe/Buy.tsx` — état de la clé, à côté des autres `useState` :
+```tsx
+  // I1 : clé d'idempotence du checkout. Conservée pour un renvoi (échec réseau /
+  // 5xx) ; régénérée dès que le panier, l'opérateur ou le numéro change, ou après
+  // un 4xx (une correction = une nouvelle commande).
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  useEffect(() => {
+    setIdempotencyKey(crypto.randomUUID());
+  }, [qty, operator, phone]);
+```
+dans `submit`, ajouter `idempotencyKey` à l'objet passé à `createOrder.mutateAsync({ … })`, et dans le `catch` :
+```tsx
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+        setIdempotencyKey(crypto.randomUUID());
+      }
+```
+
+Run: `npx vitest run src/services/tickets.service.test.ts` (dans `/Users/user/vybeFrontend`)
+Expected: PASS.
 
 - [ ] **Step 2: Type**
 
@@ -2185,38 +2719,31 @@ git -C /Users/user/vybeFrontend commit -m "feat(paiement): opérateurs ARAKA —
 
 ---
 
-### Task 11: Essai de bout en bout en sandbox (manuel)
+### Task 13: Vérification sur staging Render (manuel)
 
-- [ ] **Step 1: `.env` local** (jamais commité)
+Pas de tunnel local : on vérifie comme d'habitude, sur le staging Render (webhook public `https://vybe-staging.onrender.com/payments/webhook`), une fois backend **et** front déployés ensemble.
 
+- [ ] **Step 1: Variables d'environnement du service staging (Render)**
+
+Retirer `PAWAPAY_BASE_URL`, `PAWAPAY_API_TOKEN`, `PAWAPAY_PUBLIC_KEY` ; ajouter :
 ```
 ARAKA_BASE_URL=https://araka-api-uat.azurewebsites.net/api
-ARAKA_EMAIL=<ton e-mail marchand>
-ARAKA_PASSWORD=<ton mot de passe>
+ARAKA_EMAIL=<e-mail marchand>
+ARAKA_PASSWORD=<mot de passe>
 ARAKA_PAYMENT_PAGE_ID=2144EA75-1B78-461B-84AF-1EE1D8A0BF92
-API_BASE_URL=<URL ngrok, ex. https://ab12.ngrok-free.app>
 ```
-(retirer les `PAWAPAY_*`).
+(`ARAKA_CALLBACK_KEY` dès que ProxyPay l'a fournie ; sans elle, webhook 401 et résolution par polling/reaper — attendu.)
 
-- [ ] **Step 2: Lancer backend + tunnel**
+- [ ] **Step 2: Déploiement**
 
-```bash
-npm run start:dev
-```
-
-```bash
-ngrok http 3000
-```
+Déployer la branche backend puis le front. La migration `CheckoutRequest` (Task 9) est appliquée par le `prisma migrate deploy` du build Render.
 
 - [ ] **Step 3: Parcours**
 
-1. `GET /payments/config` → 4 opérateurs ARAKA.
-2. Achat avec `MPESA` / `243810000001` (succès) → poll `GET /order/:paymentRef/status` → `PAID` + billets.
-3. Achat avec `243810000003` (échec) → `FAILED`, stock relâché.
-4. Achat avec `MPESA` / `243970000001` → 400 (V4).
-5. Inspecter le callback sur `http://localhost:4040` : `originatingTransactionId` = notre `paymentRef`, header `X-APP-SIGNATURE` présent (webhook 401 tant que `ARAKA_CALLBACK_KEY` est absente — attendu).
-6. Retrait `MPESA` `243810000001` → `PENDING` puis `COMPLETED` au passage du reaper (≤ 10 min).
-
-- [ ] **Step 4: Render (staging)**
-
-Remplacer les `PAWAPAY_*` par les `ARAKA_*` dans les variables d'environnement du service staging, redéployer backend et front **ensemble**.
+1. `GET /payments/config` → 4 opérateurs ARAKA ; `AFRIMONEY` absent du sélecteur de retrait.
+2. Achat `MPESA` / `0810000001` (succès) → écran « validez sur votre téléphone » → `PAID` + billets.
+3. Achat `0810000003` (échec) → `FAILED`, stock relâché.
+4. Achat `MPESA` / `0970000001` → message « Ce numéro n'est pas un numéro M-Pesa » (V4, côté front).
+5. Double clic rapide sur « Payer » → un seul checkout, un seul `paymentRef` (I1).
+6. Retrait `MPESA` `0810000001` → `PENDING` puis `COMPLETED` au passage du reaper (≤ 10 min) ; double validation de l'OTP → débité une seule fois (I2).
+7. Logs Render : callback ARAKA reçu sur `/payments/webhook` ; `PaymentProviderLog` contient `originatingTransactionId` = notre `paymentRef`.
