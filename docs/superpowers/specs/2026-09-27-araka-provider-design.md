@@ -172,9 +172,9 @@ correspond pas à l'opérateur choisi. » Préfixes (après `243`), exposés dan
 Préfixes usuels RDC, cohérents avec les numéros de test ARAKA — **à confirmer par ProxyPay**
 (constante unique dans `araka.provider.ts`).
 Format : le front normalise déjà en `243` + 9 chiffres (`normalizeMobileNumber`,
-`vybeFrontend/src/lib/payments.ts`). La DTO (`CreateOrder.dto.ts`, `request-payout.dto.ts`) est
-resserrée de `^\d{6,15}$` à `^243\d{9}$`, et son commentaire (« sans préfixe international »,
-faux) corrigé.
+`vybeFrontend/src/lib/payments.ts`). La DTO d'achat (`CreateOrder.dto.ts`) est resserrée de
+`^\d{6,15}$` à `^243\d{9}$`, et son commentaire (« sans préfixe international », faux) corrigé.
+Côté retrait, `PayoutsService.normalizeMsisdn` impose déjà `243` + 9 chiffres : DTO inchangée.
 
 **V5 — Filtrage strict des réponses de statut** : voir « Règles de statut ».
 
