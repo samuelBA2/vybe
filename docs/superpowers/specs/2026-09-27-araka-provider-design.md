@@ -31,6 +31,7 @@ serveur (source de vérité), polling front, reaper, comptabilité, idempotence.
 | Araka **n'impose pas l'unicité** de `transactionReference` (réutilisation → plusieurs transactions) | unicité garantie côté Vybe |
 | Élément de statut : `transactionId` (id Araka, numérique), `status`, `transactionReference`, `originatingTransactionId` (= **notre** référence) | champs de lecture |
 | Référence inconnue sur `transactionstatus/{id}` → **HTTP 500** (pas 404) | 500 = inconnu, jamais DECLINED |
+| Référence jamais utilisée sur `transactionstatusbyreference/{ref}` → **HTTP 404** | 404 = `PENDING`, expiré par le reaper au TTL |
 | Aucun montant observé dans la réponse de statut | contrôle anti-divergence de montant non applicable |
 | Une Payment Page créée en **USD** accepte un paiement **CDF** : 2 500 CDF affichés tels quels au portail (VBTEST0020) | **une seule** `ARAKA_PAYMENT_PAGE_ID` pour les deux devises |
 
@@ -142,8 +143,9 @@ qu'ARAKA n'a rien fait : l'acheteur peut valider et être débité, et le reaper
 - Garde-fou : si le reaper voit un checkout `PENDING` depuis plus de **24 h** dont `checkStatus`
   lève encore une exception, il l'**expire** (`EXPIRED` + stock relâché ; un paiement tardif reste
   ré-honorable) avec un log d'erreur, pour qu'aucun stock ne reste bloqué indéfiniment.
-- À vérifier en sandbox avant implémentation : réponse de `byreference` pour une référence
-  **jamais utilisée** (tableau vide, 404 ou 500 ?) — conditionne la rapidité de l'expiration.
+- Vérifié en sandbox : `byreference` sur une référence **jamais utilisée** (`VBJAMAISUTILISE`)
+  renvoie **404** → `PENDING` → le reaper l'expire dès le TTL (25 min) comme un paiement abandonné.
+  Le garde-fou 24 h ne sert donc qu'en cas d'erreurs 500 persistantes côté ARAKA.
 
 **V2 — Anti-harcèlement par push USSD.** Sans limite, un compte peut déclencher des prompts de
 paiement en boucle vers le numéro d'un tiers. Sur `POST /order`, avant toute réservation :
