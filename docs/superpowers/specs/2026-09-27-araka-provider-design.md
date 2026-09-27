@@ -157,7 +157,7 @@ Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASS
 - Supprimer `src/payments/pawapay.provider.ts` et `src/payments/pawapay.provider.spec.ts`.
 - Nettoyer les mentions PawaPay : `CreateOrder.dto.ts` (commentaires + exemple d'opérateur),
   `payments.controller.ts` (commentaires RFC-9421), `payments.module.ts`, `CLAUDE.md` (section
-  Config), `.env.example` s'il existe.
+  Config). (Pas de `.env.example` dans le repo.)
 - Le `WebhookRequestContext` (méthode/chemin/authority) reste dans le contrat (inoffensif, ignoré
   par ARAKA) : le retirer n'apporte rien au présent objectif.
 
