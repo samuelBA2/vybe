@@ -32,6 +32,7 @@ serveur (source de vérité), polling front, reaper, comptabilité, idempotence.
 | Élément de statut : `transactionId` (id Araka, numérique), `status`, `transactionReference`, `originatingTransactionId` (= **notre** référence) | champs de lecture |
 | Référence inconnue sur `transactionstatus/{id}` → **HTTP 500** (pas 404) | 500 = inconnu, jamais DECLINED |
 | Aucun montant observé dans la réponse de statut | contrôle anti-divergence de montant non applicable |
+| Une Payment Page créée en **USD** accepte un paiement **CDF** : 2 500 CDF affichés tels quels au portail (VBTEST0020) | **une seule** `ARAKA_PAYMENT_PAGE_ID` pour les deux devises |
 
 Base URL UAT : `https://araka-api-uat.azurewebsites.net/api` (les chemins ci-dessous sont relatifs à
 `/api`).
@@ -200,11 +201,9 @@ Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASS
 ## Points en attente chez ProxyPay (ne bloquent pas l'implémentation)
 
 1. Clé HMAC `ARAKA_CALLBACK_KEY` (sans elle, callbacks rejetés ; résolution par polling/reaper).
-2. Une Payment Page accepte-t-elle USD **et** CDF ? Si non : deux variables
-   `ARAKA_PAYMENT_PAGE_ID_USD` / `_CDF`, choix par devise dans `initPayment` (changement localisé).
-3. Statut d'un `sendmobilemoney` via `transactionstatusbyreference` : à confirmer.
-4. Utilisateur API dédié, distinct du compte portail.
-5. URL de base de production.
+2. Statut d'un `sendmobilemoney` via `transactionstatusbyreference` : à confirmer.
+3. Utilisateur API dédié, distinct du compte portail.
+4. URL de base de production.
 
 ## Hors périmètre
 
