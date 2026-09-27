@@ -44,13 +44,13 @@ Base URL UAT : `https://araka-api-uat.azurewebsites.net/api` (les chemins ci-des
 | Méthode | Appel ARAKA | Traduction |
 |---|---|---|
 | *(privé)* `getToken()` | `POST /login` `{ emailAddress, password }` | Token gardé en mémoire jusqu'à `exp` − 60 s (décodage du payload JWT, sans vérification de signature ; à défaut TTL 1 h 50). Sur **401** d'un appel : un seul re-login + nouvel essai, puis exception. |
-| `initPayment` | `POST /pay/paymentrequest`, header `X-API-CALLBACK-MODE: 2` | Body : `order{ paymentPageId: ARAKA_PAYMENT_PAGE_ID, transactionReference: paymentRef, amount, currency, redirectURL }`, `paymentChannel{ channel: 'MOBILEMONEY', provider: operator, walletID: '+' + phoneNumber }`. Réponse `statusCode` `202`/`ACCEPTED` → `{ paymentRef, providerTxnId: transactionId }`. Tout autre code → exception (déclenche la compensation existante de `OrderService`). |
+| `initPayment` | `POST /pay/paymentrequest`, header `X-API-CALLBACK-MODE: 2` | Body : `order{ paymentPageId: ARAKA_PAYMENT_PAGE_ID, transactionReference: paymentRef, amount, currency, redirectURL }`, `paymentChannel{ channel: 'MOBILEMONEY', provider: operator, walletID: '+' + phoneNumber }`. Réponse `statusCode` `202`/`ACCEPTED` → `{ paymentRef, providerTxnId: transactionId }`. Refus **explicite** (`400`/`403`) → `ProviderDeclinedError`. Tout le reste (`500`, réponse inattendue, erreur réseau, timeout) → exception ordinaire = **cas ambigu** (voir verrou V1). |
 | `checkStatus` | `GET /reporting/transactionstatusbyreference/{paymentRef}` | Voir « Règles de statut ». |
 | `verifyWebhookSignature` | — | HMAC-SHA256 (clé `ARAKA_CALLBACK_KEY` en UTF-8) sur le **corps brut** UTF-8 ; comparaison en temps constant avec `X-APP-SIGNATURE` décodé en **Base64** (exemple C# `VerifyCallback` du manuel). Clé absente, header absent, longueur différente → `false` (fail-closed). |
 | `extractPaymentRef` | — | `JSON.parse(rawBody).originatingTransactionId` ; illisible/absent → `undefined`. |
 | `extractPayoutRef` | — | Même champ (`originatingTransactionId`). Aucun callback payout n'est documenté : méthode présente pour le contrat. |
-| `getOperators` | — (aucun endpoint) | Liste fixe : `MPESA`, `ORANGE`, `AIRTEL`, `AFRIMONEY`, chacun `available: true`, `currencies: ['USD','CDF']`. |
-| `initPayout` | `POST /pay/sendmobilemoney` | Body : `order{ transactionReference: payoutRef, amount, currency }`, `destination{ provider: operator, walletID: '+' + phoneNumber }`. Opérateur `AFRIMONEY` (non supporté en payout) → exception **avant** tout appel réseau. Voir « Règles de statut ». |
+| `getOperators` | — (aucun endpoint) | Liste fixe : `MPESA`, `ORANGE`, `AIRTEL`, `AFRIMONEY`, `currencies: ['USD','CDF']`, `payoutAvailable: true` sauf `AFRIMONEY` (`false`). Un opérateur listé dans `ARAKA_DISABLED_OPERATORS` → `available: false`, `currencies: []`, `payoutAvailable: false` (verrou V7). |
+| `initPayout` | `POST /pay/sendmobilemoney` | Body : `order{ transactionReference: payoutRef, amount, currency }`, `destination{ provider: operator, walletID: '+' + phoneNumber }`. Opérateur sans `payoutAvailable` → `DECLINED` **sans** appel réseau (défense en profondeur : normalement déjà refusé par `PayoutsService` avant le débit). Voir « Règles de statut ». |
 | `checkPayoutStatus` | `GET /reporting/transactionstatusbyreference/{payoutRef}` | Mêmes règles que `checkStatus` (à confirmer par ProxyPay). |
 
 Tous les appels : `fetch` avec timeout explicite de **15 s** (`AbortSignal.timeout`). Aucun log ne
@@ -64,6 +64,10 @@ contient token, mot de passe ni numéro complet (numéro masqué `+243******01`)
   (aujourd'hui on y recopie `initResult.paymentRef`, qui est notre propre référence).
 - `CheckStatusResult.approvedCount?: number` — nombre de transactions `APPROVED` sous la référence
   (détection de double débit).
+- `ProviderOperator.payoutAvailable: boolean` — l'opérateur accepte-t-il les décaissements
+  (ARAKA : pas `AFRIMONEY`). Le front filtre le sélecteur de retrait dessus.
+- `export class ProviderDeclinedError extends Error` — levée par `initPayment` pour un refus
+  **explicite** du fournisseur. Toute autre exception = issue inconnue.
 - Commentaires mis à jour : suppression des mentions PawaPay (RFC-9421, `VODACOM_MPESA_COD`,
   `depositId`), exemples remplacés par les codes ARAKA.
 
@@ -87,14 +91,21 @@ et sur le fait qu'on ne ré-initie **jamais** un paiement avec une référence e
   anti-divergence sauté (comportement existant).
 - `PayoutsService.resolvePayout` : **seul `APPROVED` vaut `COMPLETED`** (aujourd'hui
   `APPROVED || ACCEPTED`).
-- `OrderService.createOrder` : stocke `initResult.providerTxnId ?? null` dans `providerTxnId`.
+- `OrderService.createOrder` : stocke `initResult.providerTxnId ?? null` dans `providerTxnId` ;
+  verrous V1 (initiation ambiguë), V2 (débit), V3 (checkouts en cours), V4 (préfixe).
+- `PaymentsCleanupService` : garde-fou 24 h du verrou V1.
+- `PayoutsService.requestPayout` : verrous V4 (préfixe) et V8 (`payoutAvailable`) avant OTP/débit.
 - `PaymentsModule` : `{ provide: PAYMENT_PROVIDER, useClass: ArakaProvider }`.
 
 ## Règles de statut
 
 **Agrégation de la réponse `byreference` (tableau) — `checkStatus` / `checkPayoutStatus` :**
 
-| Cas | Résultat |
+**Filtrage préalable (verrou V5)** : seuls les éléments dont `originatingTransactionId` (ou, à
+défaut, `transactionReference`) est **strictement égal** à la référence interrogée sont retenus ;
+les autres sont ignorés (log d'avertissement).
+
+| Cas (après filtrage) | Résultat |
 |---|---|
 | Tableau vide | `PENDING` |
 | ≥ 1 élément `APPROVED` | `APPROVED`, `approvedCount` = nombre d'`APPROVED` |
@@ -117,6 +128,68 @@ explicite et unanime ; une panne ARAKA ne doit jamais faire échouer un paiement
 | `200` / `SUCCESS` ou `202` / `ACCEPTED` | `ACCEPTED` | Payout `PENDING`, confirmé par le reaper via `checkPayoutStatus` |
 | `400` / `403` (refus explicite) | `DECLINED` | reversal immédiat, `FAILED` |
 | `500`, erreur réseau, timeout | exception | Payout reste `PENDING`, réconcilié par le reaper |
+
+## Verrous de sécurité (V1)
+
+**V1 — Initiation ambiguë ≠ échec (bug existant, corrigé).** Aujourd'hui toute exception de
+`initPayment` passe les commandes en `FAILED` + stock relâché ; or un timeout/500 ne prouve pas
+qu'ARAKA n'a rien fait : l'acheteur peut valider et être débité, et le reaper ne revoit jamais un
+`FAILED` → débit sans billet. Nouveau comportement de `OrderService.createOrder` :
+- `ProviderDeclinedError` → compensation existante (`FAILED` + stock relâché) + `400`
+  « Paiement refusé par l'opérateur. »
+- toute autre exception → commandes **laissées `PENDING`**, log d'erreur, réponse normale
+  `{ paymentRef, status: 'PENDING', … }` : le front poll, le reaper tranche après le TTL.
+- Garde-fou : si le reaper voit un checkout `PENDING` depuis plus de **24 h** dont `checkStatus`
+  lève encore une exception, il l'**expire** (`EXPIRED` + stock relâché ; un paiement tardif reste
+  ré-honorable) avec un log d'erreur, pour qu'aucun stock ne reste bloqué indéfiniment.
+- À vérifier en sandbox avant implémentation : réponse de `byreference` pour une référence
+  **jamais utilisée** (tableau vide, 404 ou 500 ?) — conditionne la rapidité de l'expiration.
+
+**V2 — Anti-harcèlement par push USSD.** Sans limite, un compte peut déclencher des prompts de
+paiement en boucle vers le numéro d'un tiers. Sur `POST /order`, avant toute réservation :
+- `@Throttle` : 10 requêtes / min par IP (au lieu de la limite globale 20/min).
+- Fenêtre glissante **en mémoire** : 3 initiations / 10 min **par numéro** (clé = SHA-256 du
+  numéro, jamais le numéro en clair) et 5 initiations / 10 min **par utilisateur** → `429`.
+- Limite assumée : compteurs par instance, remis à zéro au redémarrage (Render = 1 instance).
+
+**V3 — Anti-blocage de stock.** Au plus **2 checkouts `PENDING`** simultanés par utilisateur
+(compte des `paymentRef` distincts `PENDING` en base) → `429` « Un paiement est déjà en cours. »
+
+**V4 — Cohérence opérateur ↔ numéro.** `phoneNumber` (chiffres, indicatif `243` inclus) doit
+correspondre à l'opérateur choisi, à l'achat **et** au retrait → sinon `400` « Ce numéro ne
+correspond pas à l'opérateur choisi. » Préfixes (après `243`), exposés dans
+`ProviderOperator.phonePrefixes` pour que le front valide aussi :
+
+| Opérateur | Préfixes |
+|---|---|
+| `MPESA` | `81`, `82`, `83` |
+| `ORANGE` | `80`, `84`, `85`, `89` |
+| `AIRTEL` | `97`, `98`, `99` |
+| `AFRIMONEY` | `90`, `91` |
+
+Préfixes usuels RDC, cohérents avec les numéros de test ARAKA — **à confirmer par ProxyPay**
+(constante unique dans `araka.provider.ts`).
+Format : le front normalise déjà en `243` + 9 chiffres (`normalizeMobileNumber`,
+`vybeFrontend/src/lib/payments.ts`). La DTO (`CreateOrder.dto.ts`, `request-payout.dto.ts`) est
+resserrée de `^\d{6,15}$` à `^243\d{9}$`, et son commentaire (« sans préfixe international »,
+faux) corrigé.
+
+**V5 — Filtrage strict des réponses de statut** : voir « Règles de statut ».
+
+**V6 — Transport chiffré.** `ArakaProvider` refuse de démarrer (exception au boot) si
+`ARAKA_BASE_URL` ne commence pas par `https://` : le mot de passe marchand et le token ne doivent
+jamais circuler en clair. (Variables manquantes : log d'erreur sans crash, cf. Configuration ;
+variable **dangereuse** : échec immédiat.)
+
+**V7 — Interrupteur manuel d'opérateur.** `ARAKA_DISABLED_OPERATORS` (ex. `ORANGE,AIRTEL`) :
+opérateurs servis `available: false` / `payoutAvailable: false` par `GET /payments/config` → grisés
+et non cliquables au front (déjà géré : `Buy.tsx`, `WithdrawSheet.tsx`), et refusés côté
+backend par les gardes existantes de `createOrder` / `requestPayout`. Changer la variable sur
+Render redéploie le service (quelques minutes).
+
+**V8 — Opérateur de retrait supporté.** `PayoutsService` refuse (`400`), **avant l'OTP et le
+débit**, un opérateur sans `payoutAvailable` (ex. `AFRIMONEY`). Sans ce verrou, l'exception de
+`initPayout` surviendrait après le débit et laisserait le retrait bloqué en `PENDING`.
 
 ## Flux
 
@@ -147,6 +220,9 @@ Aucun mode « accepter sans signature ».
 | `ARAKA_PASSWORD` | mot de passe associé — **secret**, uniquement `.env` / Render |
 | `ARAKA_PAYMENT_PAGE_ID` | id de la Payment Page (fin de l'URL `/payment/xxxx`), différent UAT/prod |
 | `ARAKA_CALLBACK_KEY` | clé HMAC des callbacks, fournie par ProxyPay sur demande — **secret** |
+| `ARAKA_DISABLED_OPERATORS` | optionnelle, liste séparée par des virgules (ex. `ORANGE`) : opérateurs grisés (verrou V7) |
+
+`ARAKA_BASE_URL` doit commencer par `https://`, sinon refus de démarrer (verrou V6).
 
 Supprimées : `PAWAPAY_BASE_URL`, `PAWAPAY_API_TOKEN`, `PAWAPAY_PUBLIC_KEY`.
 Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASSWORD`,
@@ -172,7 +248,8 @@ Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASS
   prod, `ARAKA_PAYMENT_PAGE_ID` prod, utilisateur API dédié, suppression des `PAWAPAY_*` sur Render.
 - Front : vérifier qu'aucun code opérateur PawaPay (`VODACOM_MPESA_COD`…) n'est codé en dur ;
   adapter logos/libellés aux codes `MPESA`/`ORANGE`/`AIRTEL`/`AFRIMONEY` servis par
-  `GET /payments/config`.
+  `GET /payments/config` ; filtrer le sélecteur de retrait sur `payoutAvailable` ; valider le
+  préfixe du numéro avec `phonePrefixes` (message clair avant envoi) ; afficher le 429 (V2/V3).
 
 ## Tests
 
@@ -188,12 +265,21 @@ Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASS
   - `extractPaymentRef` / `extractPayoutRef` : champ présent, absent, JSON illisible.
   - `initPayout` : SUCCESS → `ACCEPTED` ; 400 → `DECLINED` ; 500 → exception ; `AFRIMONEY` →
     exception sans appel réseau.
-  - `getOperators` : liste fixe.
+  - `getOperators` : liste fixe ; `AFRIMONEY` sans `payoutAvailable` ; `phonePrefixes` ;
+    `ARAKA_DISABLED_OPERATORS` → `available: false`, `currencies: []`, `payoutAvailable: false`.
+  - `checkStatus` : élément dont la référence diffère → ignoré (V5).
+  - `initPayment` : 400/403 → `ProviderDeclinedError` ; 500/timeout → exception ordinaire.
+  - Démarrage avec `ARAKA_BASE_URL` en `http://` → exception (V6).
+  - `initPayout` opérateur sans `payoutAvailable` → `DECLINED` sans appel réseau.
 - `transaction-ref.spec.ts` : longueur 20, préfixe `VB`, alphabet `A-Z2-7`, pas de doublon sur
   10 000 tirages.
 - Specs existants ajustés : `payments.service.spec` (référence via `extractPaymentRef` ;
   `ACCEPTED` ≠ payé ; `approvedCount > 1` → `REVIEW`), `payouts.service.spec` (`ACCEPTED` ≠
-  `COMPLETED` ; référence via `extractPayoutRef`), `Order.service.spec` (`providerTxnId`).
+  `COMPLETED` ; référence via `extractPayoutRef` ; V4 et V8 refusés **sans** débit ni OTP),
+  `Order.service.spec` (`providerTxnId` ; V1 : `ProviderDeclinedError` → `FAILED` + 400, timeout →
+  reste `PENDING` sans relâcher le stock ; V2 : 4e initiation sur un même numéro en 10 min → 429 ;
+  V3 : 3e checkout `PENDING` → 429 ; V4 : préfixe incohérent → 400 sans réservation de stock),
+  `payments.cleanup.spec` (V1 : exception > 24 h → `EXPIRED` ; < 24 h → inchangé).
 - Vérification finale : suite complète verte (`npm run test`), lint sans `--fix`
   (`npx eslint`), puis essai manuel sandbox en local via ngrok (numéros succès `+24381000000{1,2}`
   et échec `+24381000000{3,4}`), callback inspecté sur `localhost:4040`.
@@ -204,9 +290,13 @@ Variables manquantes au démarrage (`ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASS
 2. Statut d'un `sendmobilemoney` via `transactionstatusbyreference` : à confirmer.
 3. Utilisateur API dédié, distinct du compte portail.
 4. URL de base de production.
+5. Confirmation des préfixes téléphoniques par opérateur (verrou V4).
 
 ## Hors périmètre
 
 - Coexistence multi-fournisseurs, choix de fournisseur par opérateur.
 - Checkout hébergé (Payment Page en redirection) : on reste en push.
 - Endpoints VAS (SNEL, Socodee, Liquid, airtime).
+- Reportés à une étape suivante : délai de sécurité avant un premier retrait vers un nouveau
+  numéro ; limite de débit dédiée sur `/payments/webhook` ; rapprochement quotidien ARAKA ↔ ledger
+  et procédure de remboursement des doubles débits ; coupe-circuit automatique par opérateur.
