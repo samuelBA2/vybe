@@ -60,17 +60,11 @@ export class PaymentsService {
       throw new UnauthorizedException('Signature de webhook invalide.');
     }
 
-    // 2) Extraire NOTRE référence (depositId = paymentRef partagé du checkout).
-    let parsed: { depositId?: string };
-    try {
-      parsed = JSON.parse(rawBody) as { depositId?: string };
-    } catch {
-      throw new BadRequestException('Corps de webhook illisible.');
-    }
-    const paymentRef = parsed.depositId;
+    // 2) Extraire NOTRE référence (format propre au fournisseur → provider).
+    const paymentRef = this.payment.extractPaymentRef(rawBody);
     if (!paymentRef) {
       throw new BadRequestException(
-        'Référence de paiement absente du webhook.',
+        'Référence de paiement absente ou corps de webhook illisible.',
       );
     }
 

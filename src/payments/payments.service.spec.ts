@@ -1,30 +1,19 @@
-import {
-  createHash,
-  generateKeyPairSync,
-  KeyObject,
-  sign as cryptoSign,
-} from 'crypto';
 import { UnauthorizedException } from '@nestjs/common';
-import { PawaPayProvider } from './pawapay.provider';
 import { PaymentsService } from './payments.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-
-// Réponse fetch factice (json + ok/status), façon Response.
-function fakeResponse(body: any, ok = true, status = 200) {
-  return {
-    ok,
-    status,
-    json: jest.fn().mockResolvedValue(body),
-    text: jest.fn().mockResolvedValue(JSON.stringify(body)),
-  } as any;
-}
+import type {
+  PaymentProvider,
+  ProviderStatus,
+} from './payment-provider.interface';
 
 describe('PaymentsService.handleWebhook', () => {
   let service: PaymentsService;
-  let provider: PawaPayProvider;
-  let privateKey: KeyObject;
-  let publicPem: string;
-  let fetchMock: jest.Mock;
+  // Provider simulé : le service ne dépend que du contrat, jamais d'un fournisseur.
+  let provider: {
+    verifyWebhookSignature: jest.Mock;
+    extractPaymentRef: jest.Mock;
+    checkStatus: jest.Mock;
+  };
 
   // Le client de transaction (tx) passé au callback de $transaction.
   let tx: {
@@ -39,26 +28,7 @@ describe('PaymentsService.handleWebhook', () => {
     $transaction: jest.Mock;
   };
 
-  const PAYMENT_REF = 'dep-1111-2222';
-
-  // Fabrique un callback signé RFC-9421 (ecdsa-p256-sha256) comme PawaPay :
-  // Content-Digest (sha-512 du corps) couvert par la signature.
-  function signedCallback(rawBody: string) {
-    const digest =
-      'sha-512=:' + createHash('sha512').update(rawBody).digest('base64') + ':';
-    const params =
-      '("content-digest");created=1700000000;keyid="test-key";alg="ecdsa-p256-sha256"';
-    const base = `"content-digest": ${digest}\n"@signature-params": ${params}`;
-    const sig = cryptoSign('sha256', Buffer.from(base), {
-      key: privateKey,
-      dsaEncoding: 'ieee-p1363',
-    }).toString('base64');
-    return {
-      'content-digest': digest,
-      'signature-input': `sig1=${params}`,
-      signature: `sig1=:${sig}:`,
-    };
-  }
+  const PAYMENT_REF = 'VBTESTREF00000000001';
 
   // Une commande PENDING par défaut (200 USD → org 170, fee 30, 2 billets).
   const order = (over: Partial<any> = {}) => ({
@@ -81,26 +51,23 @@ describe('PaymentsService.handleWebhook', () => {
     ...over,
   });
 
-  // Corps de webhook + headers signés pour un paymentRef donné.
-  const webhook = (ref = PAYMENT_REF) => {
-    const rawBody = JSON.stringify({ depositId: ref, status: 'COMPLETED' });
-    return { rawBody, headers: signedCallback(rawBody) };
-  };
+  // Callback ARAKA : notre référence dans originatingTransactionId, signature valide.
+  const webhook = (ref = PAYMENT_REF) => ({
+    rawBody: JSON.stringify({
+      originatingTransactionId: ref,
+      statusDescription: 'APPROVED',
+    }),
+    headers: { 'x-app-signature': 'valid' },
+  });
 
-  // checkStatus lit GET /v2/deposits/:id (réponse enveloppée FOUND/…).
-  const mockCheck = (status: string, amount?: string, currency = 'USD') =>
-    fetchMock.mockResolvedValue(
-      fakeResponse({
-        status: 'FOUND',
-        data: { depositId: PAYMENT_REF, status, amount, currency },
-      }),
-    );
+  // Statut normalisé renvoyé par checkStatus (source de vérité).
+  const mockCheck = (
+    status: ProviderStatus,
+    amount?: number,
+    currency: 'USD' | 'CDF' = 'USD',
+  ) => provider.checkStatus.mockResolvedValue({ status, amount, currency });
 
   beforeEach(() => {
-    const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    privateKey = pair.privateKey;
-    publicPem = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
-
     tx = {
       $executeRaw: jest.fn().mockResolvedValue(1),
       ticket: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
@@ -119,23 +86,27 @@ describe('PaymentsService.handleWebhook', () => {
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
+      $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
     };
-
-    const config = {
-      get: jest.fn((key: string) =>
-        ({
-          PAWAPAY_PUBLIC_KEY: publicPem,
-          PAWAPAY_BASE_URL: 'https://api.sandbox.pawapay.io',
-          PAWAPAY_API_TOKEN: 'sandbox-token',
-        })[key],
+    provider = {
+      verifyWebhookSignature: jest.fn(
+        (_raw: string, headers: Record<string, string>) =>
+          headers['x-app-signature'] === 'valid',
       ),
+      extractPaymentRef: jest.fn((raw: string) => {
+        try {
+          return (JSON.parse(raw) as { originatingTransactionId?: string })
+            .originatingTransactionId;
+        } catch {
+          return undefined;
+        }
+      }),
+      checkStatus: jest.fn(),
     };
-    provider = new PawaPayProvider(config as any, prisma as unknown as PrismaService);
-    service = new PaymentsService(prisma as unknown as PrismaService, provider);
-
-    fetchMock = jest.fn();
-    global.fetch = fetchMock as any;
+    service = new PaymentsService(
+      prisma as unknown as PrismaService,
+      provider as unknown as PaymentProvider,
+    );
   });
 
   it('signature invalide → 401, sans re-vérification (checkStatus non appelé)', async () => {
@@ -143,18 +114,18 @@ describe('PaymentsService.handleWebhook', () => {
     await expect(service.handleWebhook(rawBody, {})).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(provider.checkStatus).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('payé → PAID + billets + 2 écritures ledger (organizer + platform) par commande', async () => {
-    mockCheck('COMPLETED', '200');
+    mockCheck('APPROVED', 200);
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
 
     // Re-vérification serveur bien effectuée.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(provider.checkStatus).toHaveBeenCalledTimes(1);
 
     // 2 billets (quantity=2) avec expiresAt = event.endDate.
     expect(tx.ticket.createMany).toHaveBeenCalledTimes(1);
@@ -188,7 +159,7 @@ describe('PaymentsService.handleWebhook', () => {
     // Un autre appelant (callback/poll/reaper) a déjà fait passer la commande à PAID :
     // notre claim PENDING→PAID n'affecte aucune ligne → aucune émission.
     tx.order.updateMany.mockResolvedValue({ count: 0 });
-    mockCheck('COMPLETED', '200');
+    mockCheck('APPROVED', 200);
     const { rawBody, headers } = webhook();
 
     await service.handleWebhook(rawBody, headers);
@@ -199,7 +170,7 @@ describe('PaymentsService.handleWebhook', () => {
 
   it('CDF : ledger écrit dans la devise de la commande (pas USD hard-codé)', async () => {
     prisma.order.findMany.mockResolvedValue([order({ currency: 'CDF', chargedAmount: 450000, organizerAmount: 380000, platformFee: 70000 })]);
-    mockCheck('COMPLETED', '450000', 'CDF');
+    mockCheck('APPROVED', 450000, 'CDF');
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
@@ -212,7 +183,7 @@ describe('PaymentsService.handleWebhook', () => {
 
   it('2ᵉ webhook (commande déjà PAID) → no-op idempotent', async () => {
     prisma.order.findMany.mockResolvedValue([order({ paymentStatus: 'PAID' })]);
-    mockCheck('COMPLETED', '200');
+    mockCheck('APPROVED', 200);
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
@@ -226,7 +197,7 @@ describe('PaymentsService.handleWebhook', () => {
   it('EXPIRED mais stock encore dispo → re-honore (PAID + billets + ledger)', async () => {
     prisma.order.findMany.mockResolvedValue([order({ paymentStatus: 'EXPIRED' })]);
     tx.$executeRaw.mockResolvedValue(1); // re-réservation OK
-    mockCheck('COMPLETED', '200');
+    mockCheck('APPROVED', 200);
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
@@ -244,7 +215,7 @@ describe('PaymentsService.handleWebhook', () => {
   it('EXPIRED et stock reparti → REVIEW (paiement accepté non honorable)', async () => {
     prisma.order.findMany.mockResolvedValue([order({ paymentStatus: 'EXPIRED' })]);
     tx.$executeRaw.mockResolvedValue(0); // stock repris par quelqu'un d'autre
-    mockCheck('COMPLETED', '200');
+    mockCheck('APPROVED', 200);
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
@@ -259,7 +230,7 @@ describe('PaymentsService.handleWebhook', () => {
   });
 
   it('refusé (DECLINED) → FAILED + stock relâché', async () => {
-    mockCheck('FAILED');
+    mockCheck('DECLINED');
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
@@ -275,7 +246,7 @@ describe('PaymentsService.handleWebhook', () => {
   });
 
   it('refusé mais commande déjà résolue en concurrence (updateMany count=0) → PAS de double relâchement de stock', async () => {
-    mockCheck('FAILED');
+    mockCheck('DECLINED');
     // Un autre appelant (callback/poll/reaper) a déjà fait la transition : notre
     // updateMany PENDING→FAILED n'affecte aucune ligne → le stock ne doit PAS être décrémenté.
     tx.order.updateMany.mockResolvedValue({ count: 0 });
@@ -287,12 +258,12 @@ describe('PaymentsService.handleWebhook', () => {
   });
 
   it('divergence de montant (checkStatus ≠ Σ chargedAmount) → REVIEW, sans billets ni ledger', async () => {
-    mockCheck('COMPLETED', '999'); // attendu 200
+    mockCheck('APPROVED', 999); // attendu 200
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1); // checkStatus bien appelé
+    expect(provider.checkStatus).toHaveBeenCalledTimes(1); // checkStatus bien appelé
     expect(prisma.order.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ paymentStatus: 'REVIEW' }),
     }));
@@ -301,8 +272,8 @@ describe('PaymentsService.handleWebhook', () => {
     expect(res).toEqual(expect.objectContaining({ status: 'REVIEW' }));
   });
 
-  it('paiement encore en cours (PROCESSING) → no-op', async () => {
-    mockCheck('PROCESSING');
+  it('paiement encore en cours (PENDING) → no-op', async () => {
+    mockCheck('PENDING');
     const { rawBody, headers } = webhook();
 
     const res = await service.handleWebhook(rawBody, headers);
@@ -315,8 +286,8 @@ describe('PaymentsService.handleWebhook', () => {
   // Cœur partagé avec le reaper : même chemin que le webhook (checkStatus défensif)
   // mais, sur non-paiement, expire la commande PENDING au lieu de no-op.
   describe('resolvePayment (reaper, expireStale)', () => {
-    it('non payé (PROCESSING) → EXPIRED + stock relâché', async () => {
-      mockCheck('PROCESSING');
+    it('non payé (PENDING) → EXPIRED + stock relâché', async () => {
+      mockCheck('PENDING');
       const res = await service.resolvePayment(PAYMENT_REF, { expireStale: true });
       expect(tx.$executeRaw).toHaveBeenCalled(); // décrément du stock réservé
       // Transition conditionnelle et idempotente PENDING→EXPIRED (garde de concurrence).
@@ -329,14 +300,14 @@ describe('PaymentsService.handleWebhook', () => {
     });
 
     it('expiration en concurrence (updateMany count=0) → PAS de double relâchement de stock', async () => {
-      mockCheck('PROCESSING');
+      mockCheck('PENDING');
       tx.order.updateMany.mockResolvedValue({ count: 0 }); // déjà expirée/résolue ailleurs
       await service.resolvePayment(PAYMENT_REF, { expireStale: true });
       expect(tx.$executeRaw).not.toHaveBeenCalled(); // aucun décrément de stock
     });
 
-    it('payé tardivement (COMPLETED) → re-honore en PAID + billets + ledger', async () => {
-      mockCheck('COMPLETED', '200');
+    it('payé tardivement (APPROVED) → re-honore en PAID + billets + ledger', async () => {
+      mockCheck('APPROVED', 200);
       const res = await service.resolvePayment(PAYMENT_REF, { expireStale: true });
       expect(tx.ticket.createMany).toHaveBeenCalledTimes(1);
       expect(tx.ledgerEntry.createMany).toHaveBeenCalledTimes(1);

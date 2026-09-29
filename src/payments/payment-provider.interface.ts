@@ -135,8 +135,8 @@ export interface PaymentProvider {
 
   // Extrait NOTRE référence (paymentRef / payoutRef) du corps brut d'un callback.
   // undefined = corps illisible ou référence absente.
-  extractPaymentRef?(rawBody: string): string | undefined;
-  extractPayoutRef?(rawBody: string): string | undefined;
+  extractPaymentRef(rawBody: string): string | undefined;
+  extractPayoutRef(rawBody: string): string | undefined;
 }
 
 // Refus EXPLICITE du fournisseur à l'initiation (rien n'a été créé chez lui).

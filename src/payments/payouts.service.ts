@@ -315,9 +315,9 @@ export class PayoutsService {
     });
   }
 
-  // Callback payout PawaPay (public, signé). Miroir de PaymentsService.handleWebhook.
-  // Signature fail-closed via le provider ; extraction de NOTRE référence (payoutId),
-  // puis résolution via checkPayoutStatus (source de vérité) dans resolvePayout.
+  // Callback payout (public, signé). Miroir de PaymentsService.handleWebhook.
+  // Signature fail-closed via le provider ; extraction de NOTRE référence (payoutRef)
+  // par le provider, puis résolution via checkPayoutStatus (source de vérité).
   async handlePayoutWebhook(
     rawBody: string,
     headers: Record<string, string>,
@@ -326,16 +326,13 @@ export class PayoutsService {
     if (!this.payment.verifyWebhookSignature(rawBody, headers, context)) {
       throw new UnauthorizedException('Signature de webhook invalide.');
     }
-    let parsed: { payoutId?: string };
-    try {
-      parsed = JSON.parse(rawBody) as { payoutId?: string };
-    } catch {
-      throw new BadRequestException('Corps de webhook illisible.');
+    const payoutRef = this.payment.extractPayoutRef(rawBody);
+    if (!payoutRef) {
+      throw new BadRequestException(
+        'Référence de payout absente ou corps de webhook illisible.',
+      );
     }
-    if (!parsed.payoutId) {
-      throw new BadRequestException('Référence de payout absente du webhook.');
-    }
-    return this.resolvePayout(parsed.payoutId);
+    return this.resolvePayout(payoutRef);
   }
 
   // Historique des retraits de l'utilisateur, tri chronologique décroissant,

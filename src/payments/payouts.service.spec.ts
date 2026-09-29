@@ -35,6 +35,14 @@ describe('PayoutsService', () => {
         { code: 'VODACOM_MPESA_COD', name: 'Vodacom', available: true, currencies: ['CDF', 'USD'] },
       ]),
       verifyWebhookSignature: jest.fn().mockReturnValue(true),
+      extractPayoutRef: jest.fn((raw: string) => {
+        try {
+          return (JSON.parse(raw) as { originatingTransactionId?: string })
+            .originatingTransactionId;
+        } catch {
+          return undefined;
+        }
+      }),
     };
     otp = { sendPayoutEmailOtp: jest.fn(), sendPayoutPhoneOtp: jest.fn(), verifyOtp: jest.fn() };
     jwt = {
@@ -229,18 +237,18 @@ describe('PayoutsService', () => {
       const resolveSpy = jest.spyOn(service, 'resolvePayout');
 
       await expect(
-        service.handlePayoutWebhook('{"payoutId":"ref"}', {}),
+        service.handlePayoutWebhook('{"originatingTransactionId":"ref"}', {}),
       ).rejects.toThrow(UnauthorizedException);
       expect(resolveSpy).not.toHaveBeenCalled();
     });
 
-    it('signature valide → délègue à resolvePayout(payoutId)', async () => {
+    it('signature valide → délègue à resolvePayout(originatingTransactionId)', async () => {
       const resolveSpy = jest
         .spyOn(service, 'resolvePayout')
         .mockResolvedValue({ payoutRef: 'ref', status: 'COMPLETED' });
 
       const res = await service.handlePayoutWebhook(
-        '{"payoutId":"ref"}',
+        '{"originatingTransactionId":"ref"}',
         { 'x-sig': 'ok' },
       );
 
@@ -254,7 +262,7 @@ describe('PayoutsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('payoutId absent → BadRequestException', async () => {
+    it('référence absente → BadRequestException', async () => {
       await expect(
         service.handlePayoutWebhook('{}', {}),
       ).rejects.toThrow(BadRequestException);
