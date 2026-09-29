@@ -39,6 +39,9 @@ export interface InitPaymentResult {
   paymentRef: string;
   // Présent UNIQUEMENT en checkout hébergé (modèle A). Absent en push (modèle B).
   paymentUrl?: string;
+  // Identifiant de la transaction CHEZ le fournisseur (ARAKA : `transactionId`),
+  // stocké dans Order.providerTxnId pour la réconciliation.
+  providerTxnId?: string;
 }
 
 // Entrée d'un payout (décaissement vers un destinataire Mobile Money). `amount`
@@ -66,6 +69,9 @@ export interface CheckStatusResult {
   // anti-divergence côté webhook → REVIEW si != Σ chargedAmount attendu).
   amount?: number;
   currency?: ProviderCurrency;
+  // Nombre de transactions APPROVED sous la même référence (ARAKA ne déduplique
+  // pas les références). > 1 = double débit → REVIEW côté service.
+  approvedCount?: number;
 }
 
 // Contexte de la requête HTTP entrante, nécessaire pour vérifier une signature
@@ -90,6 +96,11 @@ export interface ProviderOperator {
   // Une devise CLOSED chez cet opérateur est exclue (ex. opérateur USD=OK,
   // CDF=CLOSED → currencies=['USD']), jamais proposée telle quelle par PawaPay.
   currencies: ProviderCurrency[];
+  // L'opérateur accepte-t-il les décaissements (retraits) ? ARAKA : pas AFRIMONEY.
+  payoutAvailable?: boolean;
+  // Préfixes nationaux (après l'indicatif 243) des numéros de cet opérateur.
+  // Absent = pas de contrôle de cohérence numéro ↔ opérateur.
+  phonePrefixes?: string[];
 }
 
 export interface PaymentProvider {
@@ -121,6 +132,21 @@ export interface PaymentProvider {
 
   // Re-vérifie le statut d'un payout côté serveur = source de vérité.
   checkPayoutStatus(payoutRef: string): Promise<CheckStatusResult>;
+
+  // Extrait NOTRE référence (paymentRef / payoutRef) du corps brut d'un callback.
+  // undefined = corps illisible ou référence absente.
+  extractPaymentRef?(rawBody: string): string | undefined;
+  extractPayoutRef?(rawBody: string): string | undefined;
+}
+
+// Refus EXPLICITE du fournisseur à l'initiation (rien n'a été créé chez lui).
+// Toute AUTRE exception d'initPayment = issue inconnue (timeout, 500, réseau) :
+// la transaction a pu être créée, le service ne doit pas conclure à l'échec.
+export class ProviderDeclinedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderDeclinedError';
+  }
 }
 
 // Token d'injection Nest. L'implémentation concrète est liée à ce token en Task 3b :
