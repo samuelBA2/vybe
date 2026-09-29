@@ -3,9 +3,10 @@
 //   - A. Checkout hébergé (redirect) : initPayment renvoie une `paymentUrl`.
 //   - B. Push Mobile Money (push + poll) : pas de `paymentUrl`, l'acheteur valide
 //     par USSD/PIN sur son téléphone, puis callback + re-vérification serveur.
-// L'implémentation concrète (PawaPayProvider) est branchée en Task 3b ; tout le
-// flux (createOrder, webhook, reaper, comptabilité) consomme UNIQUEMENT cette
-// interface, jamais l'implémentation → changer de fournisseur ne touche qu'une brique.
+// L'implémentation concrète (ArakaProvider) est liée au token d'injection
+// PAYMENT_PROVIDER (voir payments.module.ts) ; tout le flux (createOrder, webhook,
+// reaper, comptabilité) consomme UNIQUEMENT cette interface, jamais l'implémentation
+// → changer de fournisseur ne touche qu'une brique.
 
 // Devise réellement débitée (miroir de l'enum Prisma `Currency`).
 export type ProviderCurrency = 'USD' | 'CDF';
@@ -27,10 +28,10 @@ export interface InitPaymentInput {
   redirectUrl?: string;
   // Libellé présenté à l'acheteur, le cas échéant.
   description?: string;
-  // Champs spécifiques au PUSH Mobile Money (modèle B, ex. PawaPay). Optionnels au
+  // Champs spécifiques au PUSH Mobile Money (modèle B, ex. ARAKA). Optionnels au
   // niveau du contrat (un checkout hébergé les ignore) mais REQUIS par un provider
   // push, qui les valide à l'exécution.
-  operator?: string; // code opérateur du fournisseur (ex. VODACOM_MPESA_COD)
+  operator?: string; // code opérateur du fournisseur (ex. MPESA)
   phoneNumber?: string; // numéro Mobile Money, chiffres uniquement, sans préfixe
 }
 
@@ -74,11 +75,10 @@ export interface CheckStatusResult {
   approvedCount?: number;
 }
 
-// Contexte de la requête HTTP entrante, nécessaire pour vérifier une signature
-// RFC-9421 qui couvre des composants DÉRIVÉS (@method / @path / @authority) — ce
-// que PawaPay fait en PRODUCTION (le sandbox ne couvre que "content-digest"). Le
-// corps + les headers ne suffisent pas à les résoudre : le contrôleur les fournit
-// depuis la requête. Optionnel : un fournisseur qui ne signe que le corps l'ignore.
+// Contexte de la requête HTTP entrante, pour un fournisseur dont la signature
+// couvre des composants dérivés (@method/@path/@authority). ARAKA signe
+// seulement le corps et l'ignore. Le corps + les headers ne suffisent pas à les
+// résoudre : le contrôleur les fournit depuis la requête.
 export interface WebhookRequestContext {
   method: string; // ex. 'POST'
   path: string; // chemin de la cible, sans query (ex. '/payments/webhook')
@@ -88,13 +88,13 @@ export interface WebhookRequestContext {
 
 // Opérateur Mobile Money exposé au front (dérivé de la config fournisseur).
 export interface ProviderOperator {
-  code: string; // code fournisseur exact (ex. 'VODACOM_MPESA_COD')
+  code: string; // code fournisseur exact (ex. 'MPESA')
   name: string; // nom affichable
   available: boolean; // true ssi `currencies` est non vide (invariant côté front)
   logoUrl?: string;
   // Devises pour lesquelles le DÉPÔT est utilisable MAINTENANT (status ≠ CLOSED).
   // Une devise CLOSED chez cet opérateur est exclue (ex. opérateur USD=OK,
-  // CDF=CLOSED → currencies=['USD']), jamais proposée telle quelle par PawaPay.
+  // CDF=CLOSED → currencies=['USD']), jamais proposée telle quelle par le fournisseur.
   currencies: ProviderCurrency[];
   // L'opérateur accepte-t-il les décaissements (retraits) ? ARAKA : pas AFRIMONEY.
   payoutAvailable?: boolean;
@@ -115,8 +115,8 @@ export interface PaymentProvider {
   // Vérifie l'authenticité d'un webhook/callback (signature/HMAC propre au
   // fournisseur) sur le corps EXACT reçu. Renvoie false = rejeter (401).
   // `context` fournit méthode/chemin/authority pour les signatures RFC-9421 qui
-  // couvrent des composants dérivés (@method/@path/@authority) — requis en prod
-  // PawaPay ; sans lui, une telle signature est rejetée (fail-closed).
+  // couvrent des composants dérivés (@method/@path/@authority) ; sans lui, une
+  // telle signature est rejetée (fail-closed).
   verifyWebhookSignature(
     rawBody: string,
     headers: Record<string, string>,
@@ -149,6 +149,7 @@ export class ProviderDeclinedError extends Error {
   }
 }
 
-// Token d'injection Nest. L'implémentation concrète est liée à ce token en Task 3b :
-//   { provide: PAYMENT_PROVIDER, useClass: PawaPayProvider }
+// Token d'injection Nest. L'implémentation concrète est liée à ce token dans
+// payments.module.ts :
+//   { provide: PAYMENT_PROVIDER, useClass: ArakaProvider }
 export const PAYMENT_PROVIDER = Symbol('PAYMENT_PROVIDER');

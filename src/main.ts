@@ -29,7 +29,7 @@ class MulterExceptionFilter implements ExceptionFilter {
 async function bootstrap() {
   // rawBody: true → conserve le corps BRUT (req.rawBody) en plus du JSON parsé.
   // Indispensable au webhook paiement (POST /payments/webhook) dont la signature
-  // RFC-9421 porte sur les octets exacts reçus.
+  // HMAC porte sur les octets exacts reçus.
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });

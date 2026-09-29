@@ -5,7 +5,7 @@ import { PaymentProvider } from './payment-provider.interface';
 describe('PaymentsConfigService', () => {
   it('getConfig = taux figé + opérateurs du fournisseur', async () => {
     const operators = [
-      { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, currencies: ['CDF', 'USD'] },
+      { code: 'MPESA', name: 'M-Pesa', available: true, currencies: ['CDF', 'USD'] },
     ];
     const provider = {
       getOperators: jest.fn().mockResolvedValue(operators),

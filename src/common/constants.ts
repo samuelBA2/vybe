@@ -100,8 +100,8 @@ export const CHECKOUT_REQUEST_RETENTION_HOURS = 24;
 
 // ─── Retrait / Payout organisateur (Lot 2) ────────────────────────────────────
 // Maturation : seules les ventes PAID de plus de N jours (calendaires) sont
-// retirables — laisse le temps au prefunding PawaPay (RDC ≈ T+5 j ouvrés) et
-// couvre une fenêtre remboursement/litige.
+// retirables — laisse le temps aux flux de règlement du fournisseur (RDC ≈ T+5 j
+// ouvrés) et couvre une fenêtre remboursement/litige.
 export const PAYOUT_MATURATION_DAYS = Number(
   process.env.PAYOUT_MATURATION_DAYS ?? 4,
 );

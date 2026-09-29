@@ -14,9 +14,9 @@ import { PaymentsConfigService } from './payments-config.service';
 import { PayoutsService } from './payouts.service';
 import type { WebhookRequestContext } from './payment-provider.interface';
 
-// Endpoint PUBLIC (aucun JwtAuthGuard) : c'est le fournisseur (PawaPay) qui appelle.
+// Endpoint PUBLIC (aucun JwtAuthGuard) : c'est le fournisseur (ARAKA) qui appelle.
 // L'authenticité repose sur la signature du corps, vérifiée dans le service
-// (fail-closed 401). On lit le corps BRUT (rawBody) : la signature RFC-9421 porte
+// (fail-closed 401). On lit le corps BRUT (rawBody) : la signature HMAC porte
 // sur les octets exacts reçus, pas sur le JSON re-sérialisé.
 @Controller('payments')
 export class PaymentsController {
@@ -43,10 +43,10 @@ export class PaymentsController {
       throw new BadRequestException('Corps de webhook absent.');
     }
 
-    // Contexte requête pour les composants dérivés RFC-9421 signés par PawaPay en
-    // prod (@method/@path/@authority). `trust proxy` étant actif, on privilégie
-    // l'hôte transmis par le reverse-proxy (Render), qui correspond à l'autorité de
-    // l'URL de callback publique appelée par PawaPay.
+    // Contexte requête transmis au provider (utile aux fournisseurs qui signent
+    // @method/@path/@authority ; ARAKA l'ignore). `trust proxy` étant actif, on
+    // privilégie l'hôte transmis par le reverse-proxy (Render), qui correspond à
+    // l'autorité de l'URL de callback publique appelée par le fournisseur.
     const qIndex = req.originalUrl.indexOf('?');
     const context: WebhookRequestContext = {
       method: req.method,
@@ -59,7 +59,7 @@ export class PaymentsController {
     return this.payments.handleWebhook(raw.toString('utf8'), headers, context);
   }
 
-  // Callback payout PawaPay (public, signé). Signature fail-closed dans le provider,
+  // Callback payout du fournisseur (public, signé). Signature fail-closed dans le provider,
   // re-vérif via checkPayoutStatus. Corps : { payoutId }.
   @Post('payout-webhook')
   @HttpCode(200)

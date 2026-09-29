@@ -102,7 +102,7 @@ describe('OrderService', () => {
     ...over,
   });
 
-  // Panier à une seule ligne par défaut (champs push PawaPay). La devise n'est
+  // Panier à une seule ligne par défaut (champs push Mobile Money). La devise n'est
   // plus fournie par le client : elle vient de l'événement (category.event.priceCurrency).
   const dto = (
     items: any[] = [{ ticketCategoryId: 'cat-1', quantity: 2 }],
@@ -628,7 +628,7 @@ describe('OrderService', () => {
       prisma.order.findMany.mockResolvedValue([
         { id: 'o1', paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 100 },
       ]);
-      payments.resolvePayment.mockRejectedValueOnce(new Error('PawaPay injoignable'));
+      payments.resolvePayment.mockRejectedValueOnce(new Error('fournisseur injoignable'));
       const warn = jest
         .spyOn(Logger.prototype, 'warn')
         .mockImplementation(() => undefined);

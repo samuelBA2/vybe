@@ -8,7 +8,7 @@ import {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // Split commission/organisateur dans la devise donnée. USD : 2 décimales.
-// CDF : entiers (PawaPay refuse les décimales) — le fee est arrondi, l'organisateur
+// CDF : entiers (le fournisseur refuse les décimales) — le fee est arrondi, l'organisateur
 // prend le reste pour que fee + organizer == total exactement.
 export function splitAmount(
   total: number,

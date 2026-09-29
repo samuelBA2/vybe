@@ -18,7 +18,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // Anti-martèlement : le front sonde /status toutes les ~3 s ; on ne re-vérifie
 // le paiement auprès du fournisseur (checkStatus) qu'au plus une fois par
-// fenêtre de ce délai et par référence, pour ne pas taper PawaPay à chaque poll.
+// fenêtre de ce délai et par référence, pour ne pas marteler le fournisseur à chaque poll.
 const STATUS_RESOLVE_THROTTLE_MS = 8_000;
 
 // I1 : empreinte d'un panier. Une clé d'idempotence ne sert qu'à CE panier

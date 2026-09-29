@@ -131,7 +131,7 @@ export class PayoutsService {
   // (statut retourné ≠ PENDING/ACCEPTED) → reversal + FAILED (l'argent n'est pas parti).
   // Erreur réseau/transport (throw) → Payout laissé PENDING, PAS de reversal : le
   // reaper (Task 5) réconciliera via checkPayoutStatus (source de vérité), car un
-  // timeout peut survenir alors que le décaissement a bel et bien eu lieu côté PawaPay.
+  // timeout peut survenir alors que le décaissement a bel et bien eu lieu côté fournisseur.
   async verifyPayout(userId: string, otp: string, tempToken: string) {
     let payload: {
       sub: string;

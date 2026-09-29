@@ -12,7 +12,7 @@ import { payoutBounds } from 'src/common/money';
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const MATURATION_MS = PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
 
-// Quantifie un montant dans sa devise : CDF en entiers (PawaPay refuse les
+// Quantifie un montant dans sa devise : CDF en entiers (le fournisseur refuse les
 // décimales), USD à 2 décimales.
 const quantize = (n: number, currency: $Enums.Currency) =>
   currency === 'CDF' ? Math.round(n) : round2(n);
