@@ -245,11 +245,9 @@ export class PayoutsService {
 
     const check = await this.payment.checkPayoutStatus(payoutRef);
 
-    if (check.status === 'APPROVED' || check.status === 'ACCEPTED') {
-      // Déviation acceptée par rapport au chemin dépôt (qui route une divergence de
-      // montant vers REVIEW) : ici le montant du payout est fixé côté serveur
-      // (amount calculé par nos soins, pas saisi par l'acheteur), donc il n'y a pas
-      // de divergence à arbitrer — APPROVED/ACCEPTED implique toujours COMPLETED.
+    if (check.status === 'APPROVED') {
+      // Seul APPROVED prouve le crédit du destinataire (ACCEPTED = en cours). Pas
+      // d'arbitrage de montant ici : il est fixé côté serveur (calculé par nos soins).
       await this.prisma.payout.update({
         where: { id: payout.id },
         data: { status: 'COMPLETED', resolvedAt: new Date() },

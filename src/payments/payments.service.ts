@@ -105,8 +105,10 @@ export class PaymentsService {
       return { paymentRef, status: 'FAILED' };
     }
 
-    // Ni approuvé ni refusé (PROCESSING/NOT_FOUND).
-    if (check.status !== 'APPROVED' && check.status !== 'ACCEPTED') {
+    // Pas (encore) approuvé : ACCEPTED/PENDING = transaction en cours. ACCEPTED
+    // n'a de sens qu'à l'initiation — ARAKA le renvoie aussi pour une transaction
+    // non finalisée : JAMAIS considéré comme payé.
+    if (check.status !== 'APPROVED') {
       if (opts?.expireStale) {
         // Reaper : le paiement traîne au-delà du TTL sans être confirmé → on libère
         // le stock. EXPIRED (≠ FAILED) : un paiement tardif pourra re-honorer.
@@ -114,6 +116,16 @@ export class PaymentsService {
         return { paymentRef, status: 'EXPIRED' };
       }
       return { paymentRef, status: 'PENDING' };
+    }
+
+    // Plusieurs transactions APPROVED sous la même référence = double débit de
+    // l'acheteur : aucun billet automatique, régularisation manuelle.
+    if ((check.approvedCount ?? 1) > 1) {
+      await this.markReview(paymentRef);
+      this.logger.warn(
+        `Double débit détecté (paymentRef=${paymentRef}, ${check.approvedCount} transactions APPROVED) → REVIEW.`,
+      );
+      return { paymentRef, status: 'REVIEW' };
     }
 
     // Approuvé : contrôle anti-divergence si le fournisseur expose le montant.
@@ -125,10 +137,7 @@ export class PaymentsService {
       // Paiement accepté mais montant incohérent : résolution manuelle (jamais de
       // billet/ledger sur un montant douteux). Un paiement accepté ne reste jamais
       // sans résolution → REVIEW.
-      await this.prisma.order.updateMany({
-        where: { paymentRef, paymentStatus: { in: ['PENDING', 'EXPIRED'] } },
-        data: { paymentStatus: 'REVIEW' },
-      });
+      await this.markReview(paymentRef);
       this.logger.warn(
         `Divergence de montant (paymentRef=${paymentRef}) : confirmé=${check.amount} attendu=${expectedCharged} → REVIEW.`,
       );
@@ -301,6 +310,15 @@ export class PaymentsService {
           WHERE "id" = ${order.ticketCategoryId}`;
         }
       }
+    });
+  }
+
+  // Résolution manuelle : les commandes non terminales du checkout passent REVIEW
+  // (un paiement accepté ne reste jamais sans résolution, jamais de billet douteux).
+  private async markReview(paymentRef: string): Promise<void> {
+    await this.prisma.order.updateMany({
+      where: { paymentRef, paymentStatus: { in: ['PENDING', 'EXPIRED'] } },
+      data: { paymentStatus: 'REVIEW' },
     });
   }
 

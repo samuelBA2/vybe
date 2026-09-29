@@ -283,6 +283,37 @@ describe('PaymentsService.handleWebhook', () => {
     expect(res).toEqual(expect.objectContaining({ status: 'PENDING' }));
   });
 
+  it('ACCEPTED (transaction non finalisée) → PENDING, jamais de billets', async () => {
+    mockCheck('ACCEPTED', 200);
+    const { rawBody, headers } = webhook();
+
+    const res = await service.handleWebhook(rawBody, headers);
+
+    expect(tx.ticket.createMany).not.toHaveBeenCalled();
+    expect(tx.ledgerEntry.createMany).not.toHaveBeenCalled();
+    expect(res).toEqual(expect.objectContaining({ status: 'PENDING' }));
+  });
+
+  it('double débit (2 transactions APPROVED) → REVIEW, sans billets ni ledger', async () => {
+    provider.checkStatus.mockResolvedValue({
+      status: 'APPROVED',
+      approvedCount: 2,
+    });
+    const { rawBody, headers } = webhook();
+
+    const res = await service.handleWebhook(rawBody, headers);
+
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: {
+        paymentRef: PAYMENT_REF,
+        paymentStatus: { in: ['PENDING', 'EXPIRED'] },
+      },
+      data: { paymentStatus: 'REVIEW' },
+    });
+    expect(tx.ticket.createMany).not.toHaveBeenCalled();
+    expect(res).toEqual(expect.objectContaining({ status: 'REVIEW' }));
+  });
+
   // Cœur partagé avec le reaper : même chemin que le webhook (checkStatus défensif)
   // mais, sur non-paiement, expire la commande PENDING au lieu de no-op.
   describe('resolvePayment (reaper, expireStale)', () => {

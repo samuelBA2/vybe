@@ -229,6 +229,21 @@ describe('PayoutsService', () => {
         expect.anything(),
       );
     });
+
+    it('ACCEPTED (non finalisé) → reste PENDING, jamais COMPLETED', async () => {
+      prisma.payout.findUnique.mockResolvedValue({
+        id: 'p1',
+        payoutRef: 'ref',
+        userId: 'org-1',
+        currency: 'USD',
+        amount: 50,
+        status: 'PENDING',
+      });
+      provider.checkPayoutStatus.mockResolvedValue({ status: 'ACCEPTED' });
+      const res = await service.resolvePayout('ref');
+      expect(res.status).toBe('PENDING');
+      expect(prisma.payout.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('handlePayoutWebhook', () => {
