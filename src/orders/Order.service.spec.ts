@@ -1,5 +1,4 @@
 import {
-  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -9,7 +8,10 @@ import {
 import { OrderService } from './Order.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PLATFORM_FEE_RATE } from 'src/common/constants';
-import { PaymentProvider } from 'src/payments/payment-provider.interface';
+import {
+  PaymentProvider,
+  ProviderDeclinedError,
+} from 'src/payments/payment-provider.interface';
 import { PaymentsService } from 'src/payments/payments.service';
 
 describe('OrderService', () => {
@@ -55,7 +57,10 @@ describe('OrderService', () => {
       $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
     };
     provider = {
-      initPayment: jest.fn().mockResolvedValue({ paymentRef: 'provider-ref' }),
+      initPayment: jest.fn().mockResolvedValue({
+        paymentRef: 'ignored',
+        providerTxnId: 'provider-ref',
+      }),
       checkStatus: jest.fn(),
       verifyWebhookSignature: jest.fn(),
       // Opérateur disponible dans les deux devises par défaut (les tests d'invalidité
@@ -336,25 +341,52 @@ describe('OrderService', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('échec init paiement → commandes FAILED + stock relâché + BadGatewayException', async () => {
-    prisma.ticketCategory.findMany.mockResolvedValue([category({ id: 'cat-1', name: 'Standard', price: 100 })]);
-    provider.initPayment.mockRejectedValue(new Error('provider down'));
+  it('refus explicite du fournisseur → commandes FAILED + stock relâché + 400', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([
+      category({ id: 'cat-1', name: 'Standard', price: 100 }),
+    ]);
+    provider.initPayment.mockRejectedValue(new ProviderDeclinedError('refusé'));
 
     await expect(
-      service.createOrder('user-1', dto([{ ticketCategoryId: 'cat-1', quantity: 2 }])),
-    ).rejects.toBeInstanceOf(BadGatewayException);
+      service.createOrder(
+        'user-1',
+        dto([{ ticketCategoryId: 'cat-1', quantity: 2 }]),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
 
-    // Les commandes du checkout passent FAILED (rattrapées par paymentRef).
     const ref = tx.order.create.mock.calls[0][0].data.paymentRef;
-    expect(tx.order.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { paymentRef: ref },
-      data: expect.objectContaining({ paymentStatus: 'FAILED' }),
-    }));
-    // Stock relâché : au moins un UPDATE de décrément a été émis dans la transaction de compensation.
-    // (2 réservations attendues : 1 init + 1 release ⇒ $executeRaw appelé plus d'une fois.)
+    expect(tx.order.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { paymentRef: ref },
+        data: expect.objectContaining({ paymentStatus: 'FAILED' }),
+      }),
+    );
+    // 1 réservation + 1 relâchement.
     expect(tx.$executeRaw.mock.calls.length).toBeGreaterThan(1);
-    // Toujours aucun billet.
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
+  });
+
+  it('V1 : issue inconnue (timeout/500) → commandes laissées PENDING, stock NON relâché, réponse PENDING', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([
+      category({ id: 'cat-1', name: 'Standard', price: 100 }),
+    ]);
+    provider.initPayment.mockRejectedValue(new Error('timeout'));
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+    const res = await service.createOrder(
+      'user-1',
+      dto([{ ticketCategoryId: 'cat-1', quantity: 2 }]),
+    );
+
+    const ref = tx.order.create.mock.calls[0][0].data.paymentRef;
+    expect(res).toEqual({
+      paymentRef: ref,
+      currency: 'USD',
+      chargedAmount: 200,
+      status: 'PENDING',
+    });
+    expect(tx.order.updateMany).not.toHaveBeenCalled(); // aucune compensation FAILED
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1); // la seule réservation, aucun relâchement
   });
 
   describe('getPaymentStatus', () => {

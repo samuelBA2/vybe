@@ -1,8 +1,8 @@
-import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException, BadGatewayException } from "@nestjs/common";
+import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException } from "@nestjs/common";
 import { newTransactionRef } from "src/common/transaction-ref";
 import { PrismaService } from "src/prisma/prisma.service";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
-import { PAYMENT_PROVIDER } from "src/payments/payment-provider.interface";
+import { PAYMENT_PROVIDER, ProviderDeclinedError } from "src/payments/payment-provider.interface";
 import type { PaymentProvider } from "src/payments/payment-provider.interface";
 import { PaymentsService } from "src/payments/payments.service";
 import { splitAmount } from "src/common/money";
@@ -127,7 +127,7 @@ export class OrderService {
 
         // Initiation du paiement HORS transaction (appel réseau : ne jamais retenir
         // une transaction Prisma ouverte pendant un appel externe).
-        let initResult: { paymentRef: string; paymentUrl?: string };
+        let initResult: { paymentRef: string; paymentUrl?: string; providerTxnId?: string };
         try {
             initResult = await this.payment.initPayment({
                 paymentRef,
@@ -138,9 +138,17 @@ export class OrderService {
                 redirectUrl: `${process.env.API_BASE_URL ?? ''}/payments/webhook`,
                 description: 'Vybe billets',
             });
-        } catch {
-            // Échec de l'initiation : compensation — commandes FAILED + stock relâché
-            // (tout ou rien). Le reaper n'a alors rien à rattraper.
+        } catch (err) {
+            if (!(err instanceof ProviderDeclinedError)) {
+                // V1 : issue INCONNUE (timeout, 500, réseau). Le fournisseur a PU créer
+                // la transaction et l'acheteur peut valider : on NE conclut PAS à
+                // l'échec. Commandes laissées PENDING : le poll du front et le reaper
+                // tranchent via checkStatus (référence inconnue → 404 → expirée au TTL).
+                this.logger.error(`initPayment à l'issue inconnue (${paymentRef}), commandes laissées PENDING : ${String(err)}`);
+                return { paymentRef, currency, chargedAmount: chargedTotal, status: 'PENDING' as const };
+            }
+            // Refus EXPLICITE : rien n'a été créé chez le fournisseur → compensation
+            // (commandes FAILED + stock relâché, tout ou rien).
             await this.prisma.$transaction(async (tx) => {
                 for (const line of lines) {
                     await tx.$executeRaw`
@@ -153,13 +161,13 @@ export class OrderService {
                     data: { paymentStatus: 'FAILED' },
                 });
             });
-            throw new BadGatewayException("Le paiement n'a pas pu être initié. Réessayez.");
+            throw new BadRequestException("Paiement refusé par l'opérateur. Vérifiez le numéro et l'opérateur, puis réessayez.");
         }
 
-        // Trace fournisseur sur toutes les commandes du checkout (réconciliation).
+        // Identifiant de la transaction CHEZ le fournisseur (réconciliation).
         await this.prisma.order.updateMany({
             where: { paymentRef },
-            data: { providerTxnId: initResult.paymentRef },
+            data: { providerTxnId: initResult.providerTxnId ?? null },
         });
 
         // Modèle PUSH : pas de paymentUrl. Le client saisit opérateur + numéro, reçoit
