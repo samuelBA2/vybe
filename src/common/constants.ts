@@ -88,6 +88,13 @@ export const PAYMENT_PENDING_TTL_MINUTES = Number(
 // un paiement tardif reste ré-honorable).
 export const PAYMENT_UNRESOLVED_HARD_LIMIT_HOURS = 24;
 
+// V3 : checkouts PENDING simultanés max par utilisateur (anti-blocage de stock).
+export const MAX_PENDING_CHECKOUTS_PER_USER = 2;
+// V2 : initiations de paiement max par fenêtre (anti-harcèlement par push USSD).
+export const CHECKOUT_LIMIT_WINDOW_MS = 10 * 60_000;
+export const CHECKOUT_LIMIT_PER_PHONE = 3;
+export const CHECKOUT_LIMIT_PER_USER = 5;
+
 // ─── Retrait / Payout organisateur (Lot 2) ────────────────────────────────────
 // Maturation : seules les ventes PAID de plus de N jours (calendaires) sont
 // retirables — laisse le temps au prefunding PawaPay (RDC ≈ T+5 j ouvrés) et

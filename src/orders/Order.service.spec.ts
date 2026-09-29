@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -50,7 +51,7 @@ describe('OrderService', () => {
       ticket: { findMany: jest.fn().mockResolvedValue([]) },
       order: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       // $transaction exécute le callback en lui injectant notre faux tx.
       // Un throw du callback se propage (en vrai, Prisma annulerait la transaction).
@@ -400,6 +401,46 @@ describe('OrderService', () => {
     });
     expect(tx.order.updateMany).not.toHaveBeenCalled(); // aucune compensation FAILED
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1); // la seule réservation, aucun relâchement
+  });
+
+  it('V3 : 2 checkouts déjà PENDING → 429, pas de réservation de stock', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+    prisma.order.findMany.mockResolvedValue([{ paymentRef: 'VB1' }, { paymentRef: 'VB2' }]);
+
+    const err = await service.createOrder('user-1', dto()).catch((e: unknown) => e);
+
+    expect((err as HttpException).getStatus()).toBe(429);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 'user-1', paymentStatus: 'PENDING' },
+      distinct: ['paymentRef'],
+    }));
+  });
+
+  it('V2 : 4ᵉ initiation vers le même numéro en 10 min → 429 (anti-harcèlement USSD)', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+
+    // 3 utilisateurs différents visent le même numéro : la limite par numéro tranche.
+    await service.createOrder('user-1', dto());
+    await service.createOrder('user-2', dto());
+    await service.createOrder('user-3', dto());
+    const err = await service.createOrder('user-4', dto()).catch((e: unknown) => e);
+
+    expect((err as HttpException).getStatus()).toBe(429);
+    expect(provider.initPayment).toHaveBeenCalledTimes(3);
+  });
+
+  it('V2 : 6ᵉ initiation d’un même utilisateur en 10 min → 429', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+    const phones = ['243810000001', '243810000002', '243810000003', '243810000004', '243810000005', '243810000006'];
+
+    for (const phoneNumber of phones.slice(0, 5)) {
+      await service.createOrder('user-1', dto(undefined, { phoneNumber }));
+    }
+    const err = await service.createOrder('user-1', dto(undefined, { phoneNumber: phones[5] })).catch((e: unknown) => e);
+
+    expect((err as HttpException).getStatus()).toBe(429);
+    expect(provider.initPayment).toHaveBeenCalledTimes(5);
   });
 
   describe('getPaymentStatus', () => {

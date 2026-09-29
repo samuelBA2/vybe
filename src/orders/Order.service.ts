@@ -1,4 +1,5 @@
-import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException } from "@nestjs/common";
+import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException, HttpException, HttpStatus } from "@nestjs/common";
+import { createHash } from "crypto";
 import { newTransactionRef } from "src/common/transaction-ref";
 import { PrismaService } from "src/prisma/prisma.service";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
@@ -7,6 +8,8 @@ import type { PaymentProvider } from "src/payments/payment-provider.interface";
 import { PaymentsService } from "src/payments/payments.service";
 import { splitAmount } from "src/common/money";
 import { assertPhoneMatchesOperator } from "src/payments/operator-guards";
+import { SlidingWindowLimiter } from "src/common/sliding-window-limiter";
+import { CHECKOUT_LIMIT_PER_PHONE, CHECKOUT_LIMIT_PER_USER, CHECKOUT_LIMIT_WINDOW_MS, MAX_PENDING_CHECKOUTS_PER_USER } from "src/common/constants";
 
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -23,6 +26,10 @@ export class OrderService {
     // Horodatage de la dernière re-vérification par paymentRef (throttle du poll).
     // Purgé dès que la commande atteint un statut terminal → borné aux checkouts en cours.
     private readonly lastResolveAt = new Map<string, number>();
+
+    // V2 : fenêtres glissantes en mémoire (par numéro haché + par utilisateur).
+    private readonly phoneLimiter = new SlidingWindowLimiter(CHECKOUT_LIMIT_PER_PHONE, CHECKOUT_LIMIT_WINDOW_MS);
+    private readonly userLimiter = new SlidingWindowLimiter(CHECKOUT_LIMIT_PER_USER, CHECKOUT_LIMIT_WINDOW_MS);
 
     constructor (
         private readonly prisma: PrismaService,
@@ -86,6 +93,22 @@ export class OrderService {
 
         // V4 : le numéro doit appartenir au réseau de l'opérateur choisi.
         assertPhoneMatchesOperator(op, dto.phoneNumber);
+
+        // V3 : plafond de checkouts en cours (sinon réservation de stock en rafale).
+        const pending = await this.prisma.order.findMany({
+            where: { userId, paymentStatus: 'PENDING' },
+            select: { paymentRef: true },
+            distinct: ['paymentRef'],
+        });
+        if (pending.length >= MAX_PENDING_CHECKOUTS_PER_USER) {
+            throw new HttpException('Un paiement est déjà en cours. Validez-le sur votre téléphone ou attendez son expiration.', HttpStatus.TOO_MANY_REQUESTS);
+        }
+
+        // V2 : anti-harcèlement par push USSD (numéro jamais conservé en clair).
+        const phoneKey = createHash('sha256').update(dto.phoneNumber).digest('hex');
+        if (!this.userLimiter.tryHit(userId) || !this.phoneLimiter.tryHit(phoneKey)) {
+            throw new HttpException('Trop de demandes de paiement. Réessayez dans quelques minutes.', HttpStatus.TOO_MANY_REQUESTS);
+        }
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
         const paymentRef = newTransactionRef();
