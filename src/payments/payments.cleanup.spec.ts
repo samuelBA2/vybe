@@ -4,11 +4,17 @@ import { PaymentsService } from './payments.service';
 
 describe('PaymentsCleanupService', () => {
   let service: PaymentsCleanupService;
-  let prisma: { order: { findMany: jest.Mock } };
+  let prisma: {
+    order: { findMany: jest.Mock };
+    checkoutRequest: { deleteMany: jest.Mock };
+  };
   let payments: { resolvePayment: jest.Mock; expireUnresolved: jest.Mock };
 
   beforeEach(() => {
-    prisma = { order: { findMany: jest.fn().mockResolvedValue([]) } };
+    prisma = {
+      order: { findMany: jest.fn().mockResolvedValue([]) },
+      checkoutRequest: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
     payments = {
       resolvePayment: jest
         .fn()
@@ -82,5 +88,11 @@ describe('PaymentsCleanupService', () => {
     await service.reapExpiredPayments();
 
     expect(payments.expireUnresolved).not.toHaveBeenCalled();
+  });
+
+  it('I1 : purge les clés d’idempotence de plus de 24 h', async () => {
+    await service.reapExpiredPayments();
+    const where = prisma.checkoutRequest.deleteMany.mock.calls[0][0].where;
+    expect(where.createdAt.lt.getTime()).toBeLessThanOrEqual(Date.now() - 24 * 3_600_000);
   });
 });

@@ -95,6 +95,9 @@ export const CHECKOUT_LIMIT_WINDOW_MS = 10 * 60_000;
 export const CHECKOUT_LIMIT_PER_PHONE = 3;
 export const CHECKOUT_LIMIT_PER_USER = 5;
 
+// I1 : durée de conservation des clés d'idempotence de POST /order.
+export const CHECKOUT_REQUEST_RETENTION_HOURS = 24;
+
 // ─── Retrait / Payout organisateur (Lot 2) ────────────────────────────────────
 // Maturation : seules les ventes PAID de plus de N jours (calendaires) sont
 // retirables — laisse le temps au prefunding PawaPay (RDC ≈ T+5 j ouvrés) et

@@ -5,7 +5,9 @@ import {
   HttpException,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { OrderService } from './Order.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PLATFORM_FEE_RATE } from 'src/common/constants';
@@ -23,11 +25,13 @@ describe('OrderService', () => {
     $executeRaw: jest.Mock;
     order: { create: jest.Mock; updateMany: jest.Mock };
     ticket: { createMany: jest.Mock };
+    checkoutRequest: { create: jest.Mock };
   };
   let prisma: {
     ticketCategory: { findMany: jest.Mock };
     ticket: { findMany: jest.Mock };
     order: { updateMany: jest.Mock; findMany: jest.Mock };
+    checkoutRequest: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
   let provider: {
@@ -45,6 +49,7 @@ describe('OrderService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       ticket: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      checkoutRequest: { create: jest.fn().mockResolvedValue({}) },
     };
     prisma = {
       ticketCategory: { findMany: jest.fn() },
@@ -53,6 +58,7 @@ describe('OrderService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      checkoutRequest: { findUnique: jest.fn().mockResolvedValue(null) },
       // $transaction exécute le callback en lui injectant notre faux tx.
       // Un throw du callback se propage (en vrai, Prisma annulerait la transaction).
       $transaction: jest.fn().mockImplementation(async (cb: any) => cb(tx)),
@@ -441,6 +447,85 @@ describe('OrderService', () => {
 
     expect((err as HttpException).getStatus()).toBe(429);
     expect(provider.initPayment).toHaveBeenCalledTimes(5);
+  });
+
+  describe('I1 : idempotence (Idempotency-Key)', () => {
+    const KEY = '4f1c6a8e-2b7d-4c3a-9e5f-1a2b3c4d5e6f';
+    const p2002 = () =>
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+      });
+    const pendingOrder = (paymentRef: string) => ({
+      id: 'order-1', paymentRef, paymentStatus: 'PENDING', currency: 'USD', chargedAmount: 200,
+    });
+
+    it('nouvelle clé → CheckoutRequest créée DANS la transaction du checkout', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+
+      await service.createOrder('user-1', dto(), KEY);
+
+      const ref = tx.order.create.mock.calls[0][0].data.paymentRef;
+      expect(tx.checkoutRequest.create).toHaveBeenCalledWith({
+        data: { userId: 'user-1', key: KEY, fingerprint: expect.any(String), paymentRef: ref },
+      });
+    });
+
+    it('même clé + même panier → même paymentRef, aucune réservation ni initPayment de plus', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      await service.createOrder('user-1', dto(), KEY);
+      const { fingerprint, paymentRef } = tx.checkoutRequest.create.mock.calls[0][0].data;
+
+      prisma.checkoutRequest.findUnique.mockResolvedValue({ paymentRef, fingerprint });
+      prisma.order.findMany.mockResolvedValue([pendingOrder(paymentRef)]);
+      const res = await service.createOrder('user-1', dto(), KEY);
+
+      expect(res.paymentRef).toBe(paymentRef);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(provider.initPayment).toHaveBeenCalledTimes(1);
+    });
+
+    it('même clé + autre panier → 422', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      prisma.checkoutRequest.findUnique.mockResolvedValue({ paymentRef: 'VBX', fingerprint: 'autre-panier' });
+
+      await expect(service.createOrder('user-1', dto(), KEY)).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('clé mal formée → 400', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      await expect(service.createOrder('user-1', dto(), 'pas-un-uuid')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('course sur la même clé (P2002) → renvoie le checkout gagnant, sans initPayment', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      let fingerprint = '';
+      tx.checkoutRequest.create.mockImplementation(({ data }: any) => {
+        fingerprint = data.fingerprint;
+        return Promise.reject(p2002());
+      });
+      prisma.checkoutRequest.findUnique
+        .mockResolvedValueOnce(null) // 1er contrôle : clé encore inconnue
+        .mockImplementationOnce(() => Promise.resolve({ paymentRef: 'VBGAGNANT', fingerprint }));
+      prisma.order.findMany.mockResolvedValue([pendingOrder('VBGAGNANT')]);
+
+      const res = await service.createOrder('user-1', dto(), KEY);
+
+      expect(res.paymentRef).toBe('VBGAGNANT');
+      expect(provider.initPayment).not.toHaveBeenCalled();
+    });
+
+    it('sans clé → comportement inchangé (aucune CheckoutRequest)', async () => {
+      prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+      await service.createOrder('user-1', dto());
+      expect(tx.checkoutRequest.create).not.toHaveBeenCalled();
+      expect(prisma.checkoutRequest.findUnique).not.toHaveBeenCalled();
+    });
   });
 
   describe('getPaymentStatus', () => {

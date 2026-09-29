@@ -1,5 +1,7 @@
-import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException, HttpException, HttpStatus } from "@nestjs/common";
+import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException, UnprocessableEntityException, HttpException, HttpStatus } from "@nestjs/common";
 import { createHash } from "crypto";
+import { Prisma } from "@prisma/client";
+import { isUUID } from "class-validator";
 import { newTransactionRef } from "src/common/transaction-ref";
 import { PrismaService } from "src/prisma/prisma.service";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
@@ -19,6 +21,17 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // fenêtre de ce délai et par référence, pour ne pas taper PawaPay à chaque poll.
 const STATUS_RESOLVE_THROTTLE_MS = 8_000;
 
+// I1 : empreinte d'un panier. Une clé d'idempotence ne sert qu'à CE panier
+// (mêmes lignes, même opérateur, même numéro), indépendamment de l'ordre des lignes.
+function checkoutFingerprint(dto: CreateOrderDto): string {
+    const items = [...dto.items]
+        .sort((a, b) => a.ticketCategoryId.localeCompare(b.ticketCategoryId))
+        .map((i) => [i.ticketCategoryId, i.quantity]);
+    return createHash('sha256')
+        .update(JSON.stringify({ items, operator: dto.operator, phoneNumber: dto.phoneNumber }))
+        .digest('hex');
+}
+
 @Injectable()
 export class OrderService {
 
@@ -36,7 +49,19 @@ export class OrderService {
         @Inject(PAYMENT_PROVIDER) private readonly payment: PaymentProvider,
         private readonly payments: PaymentsService,
     ){}
-    async createOrder(userId: string, dto: CreateOrderDto){
+    async createOrder(userId: string, dto: CreateOrderDto, idempotencyKey?: string){
+        // I1 : idempotence (double clic / renvoi réseau). Même clé + même panier =
+        // même checkout, renvoyé tel quel (ni stock, ni V2/V3, ni nouveau push).
+        let fingerprint: string | undefined;
+        if (idempotencyKey !== undefined) {
+            if (!isUUID(idempotencyKey, 4)) {
+                throw new BadRequestException('En-tête Idempotency-Key invalide (UUID attendu).');
+            }
+            fingerprint = checkoutFingerprint(dto);
+            const replay = await this.replayCheckout(userId, idempotencyKey, fingerprint);
+            if (replay) return replay;
+        }
+
         const items = dto.items;
 
         // Le panier agrège déjà par catégorie : un doublon est une anomalie client.
@@ -122,35 +147,57 @@ export class OrderService {
         // PENDING (AUCUN billet — ils ne sont générés qu'au passage PAID via webhook).
         // Si une seule catégorie manque de stock, le throw annule aussi les
         // réservations déjà faites (tout ou rien).
-        await this.prisma.$transaction(async (tx) => {
-            for (const line of lines) {
-                const { item, category } = line;
+        try {
+            await this.prisma.$transaction(async (tx) => {
+                // I1 : la clé est réclamée DANS la transaction du checkout. Une requête
+                // concurrente avec la même clé échoue ici (P2002) après notre commit.
+                if (idempotencyKey !== undefined) {
+                    await tx.checkoutRequest.create({
+                        data: { userId, key: idempotencyKey, fingerprint: fingerprint!, paymentRef },
+                    });
+                }
 
-                // Réservation atomique anti-survente.
-                const affected = await tx.$executeRaw`
-                UPDATE "TicketCategory"
-                SET "soldCount" = "soldCount" + ${item.quantity}
-                WHERE "id" = ${item.ticketCategoryId}
-                AND ("totalStock" IS NULL OR "soldCount" + ${item.quantity} <= "totalStock")`;
-                if (affected === 0) throw new ConflictException(`Stock insuffisant : ${category.name}`);
+                for (const line of lines) {
+                    const { item, category } = line;
 
-                await tx.order.create({
-                    data: {
-                        userId,
-                        ticketCategoryId: item.ticketCategoryId,
-                        quantity: item.quantity,
-                        unitPrice: line.unitPrice,
-                        totalAmount: line.totalAmount,
-                        platformFee: line.platformFee,
-                        organizerAmount: line.organizerAmount,
-                        currency,
-                        chargedAmount: line.chargedAmount,
-                        paymentRef,
-                        paymentStatus: 'PENDING',
-                    },
-                });
+                    // Réservation atomique anti-survente.
+                    const affected = await tx.$executeRaw`
+                    UPDATE "TicketCategory"
+                    SET "soldCount" = "soldCount" + ${item.quantity}
+                    WHERE "id" = ${item.ticketCategoryId}
+                    AND ("totalStock" IS NULL OR "soldCount" + ${item.quantity} <= "totalStock")`;
+                    if (affected === 0) throw new ConflictException(`Stock insuffisant : ${category.name}`);
+
+                    await tx.order.create({
+                        data: {
+                            userId,
+                            ticketCategoryId: item.ticketCategoryId,
+                            quantity: item.quantity,
+                            unitPrice: line.unitPrice,
+                            totalAmount: line.totalAmount,
+                            platformFee: line.platformFee,
+                            organizerAmount: line.organizerAmount,
+                            currency,
+                            chargedAmount: line.chargedAmount,
+                            paymentRef,
+                            paymentStatus: 'PENDING',
+                        },
+                    });
+                }
+            });
+        } catch (err) {
+            if (
+                idempotencyKey !== undefined &&
+                err instanceof Prisma.PrismaClientKnownRequestError &&
+                err.code === 'P2002'
+            ) {
+                // Course sur la même clé : l'autre requête a gagné ; notre transaction
+                // est annulée (stock rendu). On renvoie SON checkout.
+                const replay = await this.replayCheckout(userId, idempotencyKey, fingerprint!);
+                if (replay) return replay;
             }
-        });
+            throw err;
+        }
 
         // Initiation du paiement HORS transaction (appel réseau : ne jamais retenir
         // une transaction Prisma ouverte pendant un appel externe).
@@ -268,6 +315,19 @@ export class OrderService {
             where: { userId, paymentRef },
             select: { id: true, paymentStatus: true, currency: true, chargedAmount: true },
         });
+    }
+
+    // I1 : état du checkout déjà créé avec cette clé ; null si la clé est inconnue.
+    // Clé connue mais panier différent → 422 (jamais deux paniers sous une clé).
+    private async replayCheckout(userId: string, key: string, fingerprint: string) {
+        const existing = await this.prisma.checkoutRequest.findUnique({
+            where: { userId_key: { userId, key } },
+        });
+        if (!existing) return null;
+        if (existing.fingerprint !== fingerprint) {
+            throw new UnprocessableEntityException("Clé d'idempotence déjà utilisée pour une autre commande.");
+        }
+        return this.getPaymentStatus(userId, existing.paymentRef);
     }
 
     // Throttle de l'auto-vérification : true au plus une fois par fenêtre

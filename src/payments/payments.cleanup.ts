@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/prisma/prisma.service';
 import {
+  CHECKOUT_REQUEST_RETENTION_HOURS,
   PAYMENT_PENDING_TTL_MINUTES,
   PAYMENT_UNRESOLVED_HARD_LIMIT_HOURS,
 } from 'src/common/constants';
@@ -23,6 +24,19 @@ export class PaymentsCleanupService {
 
   @Cron(CronExpression.EVERY_10_MINUTES)
   async reapExpiredPayments(): Promise<void> {
+    // I1 : purge des clés d'idempotence périmées (un rejeu au-delà n'a plus de sens).
+    try {
+      await this.prisma.checkoutRequest.deleteMany({
+        where: {
+          createdAt: {
+            lt: new Date(Date.now() - CHECKOUT_REQUEST_RETENTION_HOURS * 3_600_000),
+          },
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Purge CheckoutRequest impossible : ${String(err)}`);
+    }
+
     const cutoff = new Date(Date.now() - PAYMENT_PENDING_TTL_MINUTES * 60_000);
 
     // Un paymentRef par checkout : on dédoublonne pour ne résoudre chaque checkout
