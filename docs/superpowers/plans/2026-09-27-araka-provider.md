@@ -2549,10 +2549,10 @@ git commit -m "chore(paiement): retire les mentions PawaPay, documente la config
 
 - [ ] **Step 1: Branche (jamais depuis `main`)**
 
-Partir de la branche front qui porte le checkout Mobile Money actuel (celle déployée avec `feat/payments` — à confirmer avec l'utilisateur avant de commencer), puis :
+Branche déjà créée : `front-araka-provider`, issue de `feat/event-details-tablet-responsive` (qui contient `feat/checkout-payment` et `main`). Se placer dessus :
 
 ```bash
-git -C /Users/user/vybeFrontend checkout -b feat/araka-operators
+git -C /Users/user/vybeFrontend switch front-araka-provider
 ```
 
 - [ ] **Step 1b: I1 — envoyer une clé d'idempotence avec `POST /order`**
