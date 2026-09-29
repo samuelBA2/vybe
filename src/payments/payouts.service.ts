@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -8,7 +9,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { $Enums } from '@prisma/client';
+import { $Enums, Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { OtpService } from 'src/otp/otp.service';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
@@ -112,6 +114,8 @@ export class PayoutsService {
       {
         sub: userId,
         type: 'payout',
+        // I2 : identifiant unique, consommé une seule fois à la validation.
+        jti: randomUUID(),
         currency,
         amount,
         phoneNumber,
@@ -132,6 +136,7 @@ export class PayoutsService {
     let payload: {
       sub: string;
       type: string;
+      jti?: string;
       currency: $Enums.Currency;
       amount: number;
       phoneNumber: string;
@@ -146,6 +151,10 @@ export class PayoutsService {
       throw new ForbiddenException('Type de token non autorisé.');
     if (payload.sub !== userId)
       throw new ForbiddenException('Token non autorisé.');
+    // I2 : un tempToken de retrait est à usage unique (jti consommé ci-dessous).
+    if (!payload.jti)
+      throw new UnauthorizedException('Token invalide ou expiré.');
+    const jti = payload.jti;
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('Utilisateur introuvable.');
@@ -158,45 +167,60 @@ export class PayoutsService {
 
     // Débit atomique : verrou par user (sérialise 2 demandes concurrentes), re-vérif
     // du solde retirable de la devise, écriture PAYOUT_ORGANIZER (négatif) + Payout.
-    const payout = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe(
-        'SELECT pg_advisory_xact_lock(hashtext($1))',
-        userId,
-      );
-      // Lecture volontairement sur this.prisma (pas tx) : le verrou advisory par
-      // user ci-dessus sérialise les vérifications concurrentes, donc un 2e appelant
-      // ne lit ce solde qu'après le COMMIT de la transaction du 1er ; en READ
-      // COMMITTED il voit alors le débit déjà écrit — pas de sur-retrait possible.
-      const { withdrawable } = await this.earnings.getWithdrawable(
-        userId,
-        currency,
-      );
-      if (amount > withdrawable) {
-        throw new BadRequestException('Solde retirable insuffisant.');
+    // Seul payout.id est utilisé après la transaction.
+    let payout: { id: string };
+    try {
+      payout = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          userId,
+        );
+        // I2 : consommation du jti DANS la transaction du débit. Une seconde
+        // validation concurrente échoue ici (P2002) → rollback, aucun débit.
+        await tx.usedToken.create({ data: { jti } });
+        // Lecture volontairement sur this.prisma (pas tx) : le verrou advisory par
+        // user ci-dessus sérialise les vérifications concurrentes, donc un 2e appelant
+        // ne lit ce solde qu'après le COMMIT de la transaction du 1er ; en READ
+        // COMMITTED il voit alors le débit déjà écrit — pas de sur-retrait possible.
+        const { withdrawable } = await this.earnings.getWithdrawable(
+          userId,
+          currency,
+        );
+        if (amount > withdrawable) {
+          throw new BadRequestException('Solde retirable insuffisant.');
+        }
+        const created = await tx.payout.create({
+          data: {
+            payoutRef,
+            userId,
+            currency,
+            amount,
+            operator: payload.operator,
+            destination: payload.phoneNumber,
+            status: 'PENDING',
+          },
+        });
+        await tx.ledgerEntry.create({
+          data: {
+            account: 'ORGANIZER',
+            userId,
+            type: 'PAYOUT_ORGANIZER',
+            amount: -amount,
+            currency,
+            payoutId: created.id,
+          },
+        });
+        return created;
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException('Ce retrait a déjà été validé.');
       }
-      const created = await tx.payout.create({
-        data: {
-          payoutRef,
-          userId,
-          currency,
-          amount,
-          operator: payload.operator,
-          destination: payload.phoneNumber,
-          status: 'PENDING',
-        },
-      });
-      await tx.ledgerEntry.create({
-        data: {
-          account: 'ORGANIZER',
-          userId,
-          type: 'PAYOUT_ORGANIZER',
-          amount: -amount,
-          currency,
-          payoutId: created.id,
-        },
-      });
-      return created;
-    });
+      throw err;
+    }
 
     // Initiation HORS transaction (appel réseau).
     try {

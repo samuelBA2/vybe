@@ -1,9 +1,11 @@
 import { PayoutsService } from './payouts.service';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 describe('PayoutsService', () => {
   let service: PayoutsService;
@@ -24,6 +26,7 @@ describe('PayoutsService', () => {
         findMany: jest.fn(),
       },
       ledgerEntry: { create: jest.fn().mockResolvedValue({}), count: jest.fn().mockResolvedValue(0) },
+      usedToken: { create: jest.fn().mockResolvedValue({}) },
       $transaction: jest.fn().mockImplementation(async (fn: any) => fn(prisma)),
       $executeRawUnsafe: jest.fn().mockResolvedValue(0),
       $executeRaw: jest.fn().mockResolvedValue(0),
@@ -63,7 +66,7 @@ describe('PayoutsService', () => {
     jwt = {
       sign: jest.fn().mockReturnValue('temp.jwt'),
       verify: jest.fn().mockReturnValue({
-        sub: 'org-1', type: 'payout', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
+        sub: 'org-1', type: 'payout', jti: 'jti-1', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
       }),
     };
     // getWithdrawable(userId, currency) → { currency, withdrawable }.
@@ -159,6 +162,16 @@ describe('PayoutsService', () => {
       ).rejects.toThrow(BadRequestException);
       expect(otp.sendPayoutEmailOtp).not.toHaveBeenCalled();
     });
+
+    it('I2 : le tempToken porte un jti unique', async () => {
+      await service.requestPayout('org-1', {
+        currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
+      });
+      expect(jwt.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ jti: expect.any(String) }),
+        expect.anything(),
+      );
+    });
   });
 
   describe('verifyPayout', () => {
@@ -236,6 +249,36 @@ describe('PayoutsService', () => {
       ).rejects.toThrow(ForbiddenException);
       expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
       expect(provider.initPayout).not.toHaveBeenCalled();
+    });
+
+    it('I2 : consomme le jti dans la transaction du débit', async () => {
+      await service.verifyPayout('org-1', '123456', 'temp.jwt');
+      expect(prisma.usedToken.create).toHaveBeenCalledWith({ data: { jti: 'jti-1' } });
+    });
+
+    it('I2 : jti déjà consommé (double soumission) → 409, aucun débit ni initPayout', async () => {
+      prisma.usedToken.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+      await expect(service.verifyPayout('org-1', '123456', 'temp.jwt')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+      expect(prisma.payout.create).not.toHaveBeenCalled();
+      expect(provider.initPayout).not.toHaveBeenCalled();
+    });
+
+    it('I2 : token sans jti → 401, aucun mouvement', async () => {
+      jwt.verify.mockReturnValue({
+        sub: 'org-1', type: 'payout', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
+      });
+      await expect(service.verifyPayout('org-1', '123456', 'temp.jwt')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
     });
   });
 
