@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger, NotFoundException, ForbiddenException, BadRequestException, ConflictException, BadGatewayException } from "@nestjs/common";
-import { randomUUID } from "crypto";
+import { newTransactionRef } from "src/common/transaction-ref";
 import { PrismaService } from "src/prisma/prisma.service";
 import { CreateOrderDto } from "./dto/CreateOrder.dto";
 import { PAYMENT_PROVIDER } from "src/payments/payment-provider.interface";
@@ -84,7 +84,7 @@ export class OrderService {
         }
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
-        const paymentRef = randomUUID();
+        const paymentRef = newTransactionRef();
         // Montant total réellement poussé au fournisseur = Σ chargedAmount (garde
         // l'invariant vérifié côté webhook : provider.amount == Σ chargedAmount).
         const chargedTotal = currency === 'CDF'

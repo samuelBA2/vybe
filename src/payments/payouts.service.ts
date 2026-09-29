@@ -8,12 +8,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { randomUUID } from 'crypto';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { OtpService } from 'src/otp/otp.service';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
 import { payoutBounds } from 'src/common/money';
+import { newTransactionRef } from 'src/common/transaction-ref';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type { PaymentProvider } from './payment-provider.interface';
 import { EarningsService } from './earnings.service';
@@ -144,7 +144,7 @@ export class PayoutsService {
 
     const currency = payload.currency;
     const amount = payload.amount;
-    const payoutRef = randomUUID();
+    const payoutRef = newTransactionRef();
 
     // Débit atomique : verrou par user (sérialise 2 demandes concurrentes), re-vérif
     // du solde retirable de la devise, écriture PAYOUT_ORGANIZER (négatif) + Payout.
