@@ -22,15 +22,16 @@ export class CreateOrderDto {
     @Type(() => OrderItemDto)
     items : OrderItemDto[];
 
-    // ─── Push Mobile Money (PawaPay) ────────────────────────────────────────────
-    // Code opérateur du fournisseur (ex. VODACOM_MPESA_COD). Fourni par le frontend
-    // depuis la liste des opérateurs disponibles.
+    // ─── Push Mobile Money ──────────────────────────────────────────────────────
+    // Code opérateur du fournisseur (ex. MPESA). Fourni par le frontend depuis la
+    // liste des opérateurs de GET /payments/config.
     @IsString()
     @Matches(/^[A-Z0-9_]+$/, { message: 'Opérateur Mobile Money invalide.' })
     operator : string;
 
-    // Numéro Mobile Money : chiffres uniquement, sans préfixe international ni +.
+    // Numéro Mobile Money RDC normalisé : indicatif 243 + 9 chiffres, sans « + »
+    // (le front normalise ; le provider ajoute le « + » attendu par ARAKA).
     @IsString()
-    @Matches(/^\d{6,15}$/, { message: 'Numéro Mobile Money invalide.' })
+    @Matches(/^243\d{9}$/, { message: 'Numéro Mobile Money invalide.' })
     phoneNumber : string;
 }

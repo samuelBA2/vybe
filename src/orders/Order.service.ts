@@ -6,6 +6,7 @@ import { PAYMENT_PROVIDER, ProviderDeclinedError } from "src/payments/payment-pr
 import type { PaymentProvider } from "src/payments/payment-provider.interface";
 import { PaymentsService } from "src/payments/payments.service";
 import { splitAmount } from "src/common/money";
+import { assertPhoneMatchesOperator } from "src/payments/operator-guards";
 
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -82,6 +83,9 @@ export class OrderService {
         if (!op || !op.available || !op.currencies.includes(currency)) {
             throw new BadRequestException('Opérateur indisponible pour cette devise.');
         }
+
+        // V4 : le numéro doit appartenir au réseau de l'opérateur choisi.
+        assertPhoneMatchesOperator(op, dto.phoneNumber);
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
         const paymentRef = newTransactionRef();

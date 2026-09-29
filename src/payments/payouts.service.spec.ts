@@ -32,7 +32,22 @@ describe('PayoutsService', () => {
       initPayout: jest.fn().mockResolvedValue({ payoutRef: 'p1', status: 'PENDING' }),
       checkPayoutStatus: jest.fn(),
       getOperators: jest.fn().mockResolvedValue([
-        { code: 'VODACOM_MPESA_COD', name: 'Vodacom', available: true, currencies: ['CDF', 'USD'] },
+        {
+          code: 'MPESA',
+          name: 'M-Pesa',
+          available: true,
+          currencies: ['CDF', 'USD'],
+          payoutAvailable: true,
+          phonePrefixes: ['81', '82', '83'],
+        },
+        {
+          code: 'AFRIMONEY',
+          name: 'Afrimoney',
+          available: true,
+          currencies: ['CDF', 'USD'],
+          payoutAvailable: false,
+          phonePrefixes: ['90', '91'],
+        },
       ]),
       verifyWebhookSignature: jest.fn().mockReturnValue(true),
       extractPayoutRef: jest.fn((raw: string) => {
@@ -48,7 +63,7 @@ describe('PayoutsService', () => {
     jwt = {
       sign: jest.fn().mockReturnValue('temp.jwt'),
       verify: jest.fn().mockReturnValue({
-        sub: 'org-1', type: 'payout', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD',
+        sub: 'org-1', type: 'payout', currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
       }),
     };
     // getWithdrawable(userId, currency) → { currency, withdrawable }.
@@ -60,7 +75,7 @@ describe('PayoutsService', () => {
   describe('requestPayout', () => {
     it('valide, envoie OTP, renvoie tempToken + devise + montant', async () => {
       const res = await service.requestPayout('org-1', {
-        currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD',
+        currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA',
       });
       expect(otp.sendPayoutEmailOtp).toHaveBeenCalledWith('a@b.co');
       expect(earnings.getWithdrawable).toHaveBeenCalledWith('org-1', 'USD');
@@ -74,50 +89,75 @@ describe('PayoutsService', () => {
 
     it('refuse un montant > solde retirable', async () => {
       await expect(
-        service.requestPayout('org-1', { currency: 'USD', amount: 500, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+        service.requestPayout('org-1', { currency: 'USD', amount: 500, phoneNumber: '243812345678', operator: 'MPESA' }),
       ).rejects.toThrow();
     });
 
     it('all:true retire tout le solde maturé de la devise', async () => {
-      const res = await service.requestPayout('org-1', { currency: 'USD', all: true, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      const res = await service.requestPayout('org-1', { currency: 'USD', all: true, phoneNumber: '243812345678', operator: 'MPESA' });
       expect(res.amount).toBe(100);
     });
 
     it('refuse un opérateur ne supportant pas la devise demandée', async () => {
       provider.getOperators.mockResolvedValue([
-        { code: 'VODACOM_MPESA_COD', name: 'Vodacom', available: true, currencies: ['CDF'] },
+        { code: 'MPESA', name: 'Vodacom', available: true, currencies: ['CDF'] },
       ]);
       await expect(
-        service.requestPayout('org-1', { currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+        service.requestPayout('org-1', { currency: 'USD', amount: 50, phoneNumber: '243812345678', operator: 'MPESA' }),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('CDF : montant arrondi à l\'entier, retrait dans la devise choisie', async () => {
       // Bornes CDF (payoutBounds) = bornes USD × taux figé = [4500, 4500000].
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 250000 });
-      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 150000.7, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 150000.7, phoneNumber: '243812345678', operator: 'MPESA' });
       expect(earnings.getWithdrawable).toHaveBeenCalledWith('org-1', 'CDF');
       expect(res).toEqual({ tempToken: 'temp.jwt', currency: 'CDF', amount: 150001 });
     });
 
     it('CDF : montant dans les bornes CDF (250 000, ∈ [4500, 4500000]) n\'est PAS rejeté pour cause de borne', async () => {
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 300000 });
-      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 250000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' });
+      const res = await service.requestPayout('org-1', { currency: 'CDF', amount: 250000, phoneNumber: '243812345678', operator: 'MPESA' });
       expect(res.amount).toBe(250000);
     });
 
     it('CDF : refuse un montant > borne max CDF (5 000 000), message avec la devise', async () => {
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 10000000 });
       await expect(
-        service.requestPayout('org-1', { currency: 'CDF', amount: 5000000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+        service.requestPayout('org-1', { currency: 'CDF', amount: 5000000, phoneNumber: '243812345678', operator: 'MPESA' }),
       ).rejects.toThrow('CDF');
     });
 
     it('CDF : refuse un montant < borne min CDF (4500)', async () => {
       earnings.getWithdrawable.mockResolvedValue({ currency: 'CDF', withdrawable: 300000 });
       await expect(
-        service.requestPayout('org-1', { currency: 'CDF', amount: 3000, phoneNumber: '243812345678', operator: 'VODACOM_MPESA_COD' }),
+        service.requestPayout('org-1', { currency: 'CDF', amount: 3000, phoneNumber: '243812345678', operator: 'MPESA' }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('V8 : opérateur sans retrait (AFRIMONEY) → 400 avant OTP et solde', async () => {
+      await expect(
+        service.requestPayout('org-1', {
+          currency: 'USD',
+          amount: 50,
+          phoneNumber: '243900000001',
+          operator: 'AFRIMONEY',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(otp.sendPayoutEmailOtp).not.toHaveBeenCalled();
+      expect(earnings.getWithdrawable).not.toHaveBeenCalled();
+    });
+
+    it('V4 : numéro d’un autre opérateur → 400 avant OTP', async () => {
+      await expect(
+        service.requestPayout('org-1', {
+          currency: 'USD',
+          amount: 50,
+          phoneNumber: '243970000001',
+          operator: 'MPESA',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(otp.sendPayoutEmailOtp).not.toHaveBeenCalled();
     });
   });
 
@@ -173,7 +213,7 @@ describe('PayoutsService', () => {
         currency: 'USD',
         amount: 50,
         phoneNumber: '243812345678',
-        operator: 'VODACOM_MPESA_COD',
+        operator: 'MPESA',
       });
       await expect(
         service.verifyPayout('org-1', '123456', 'tok'),
@@ -189,7 +229,7 @@ describe('PayoutsService', () => {
         currency: 'USD',
         amount: 50,
         phoneNumber: '243812345678',
-        operator: 'VODACOM_MPESA_COD',
+        operator: 'MPESA',
       });
       await expect(
         service.verifyPayout('org-1', '123456', 'tok'),
@@ -304,9 +344,9 @@ describe('PayoutsService', () => {
 
     it('listPayouts trie createdAt desc, keyset paginé (currency + amount, nextCursor si page suivante)', async () => {
       const rows = [
-        { payoutRef: 'p3', currency: 'USD', amount: 10, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-03T10:00:00Z') },
-        { payoutRef: 'p2', currency: 'CDF', amount: 45000, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-02T10:00:00Z') },
-        { payoutRef: 'p1', currency: 'USD', amount: 30, operator: 'VODACOM_MPESA_COD', destination: '243812345678', status: 'PENDING', createdAt: new Date('2026-09-01T10:00:00Z') },
+        { payoutRef: 'p3', currency: 'USD', amount: 10, operator: 'MPESA', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-03T10:00:00Z') },
+        { payoutRef: 'p2', currency: 'CDF', amount: 45000, operator: 'MPESA', destination: '243812345678', status: 'COMPLETED', createdAt: new Date('2026-09-02T10:00:00Z') },
+        { payoutRef: 'p1', currency: 'USD', amount: 30, operator: 'MPESA', destination: '243812345678', status: 'PENDING', createdAt: new Date('2026-09-01T10:00:00Z') },
       ];
       prisma.payout.findMany.mockResolvedValue(rows); // limit=2 → 3 lignes = page suivante
 

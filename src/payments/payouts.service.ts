@@ -16,6 +16,7 @@ import { payoutBounds } from 'src/common/money';
 import { newTransactionRef } from 'src/common/transaction-ref';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import type { PaymentProvider } from './payment-provider.interface';
+import { assertPhoneMatchesOperator } from './operator-guards';
 import { EarningsService } from './earnings.service';
 import type { RequestPayoutDto } from './dto/request-payout.dto';
 
@@ -55,6 +56,15 @@ export class PayoutsService {
         `Opérateur indisponible pour un retrait en ${currency}.`,
       );
     }
+    // V8 : opérateur acceptant les décaissements (ARAKA : pas AFRIMONEY) — refusé
+    // AVANT l'OTP et le débit (sinon le retrait resterait bloqué en PENDING).
+    if (op.payoutAvailable !== true) {
+      throw new BadRequestException(
+        'Cet opérateur ne permet pas les retraits. Choisissez-en un autre.',
+      );
+    }
+    // V4 : le numéro doit appartenir au réseau de l'opérateur choisi.
+    assertPhoneMatchesOperator(op, phoneNumber);
 
     const { withdrawable } = await this.earnings.getWithdrawable(
       userId,

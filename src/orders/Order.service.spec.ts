@@ -66,7 +66,7 @@ describe('OrderService', () => {
       // Opérateur disponible dans les deux devises par défaut (les tests d'invalidité
       // de devise/opérateur surchargent ce mock).
       getOperators: jest.fn().mockResolvedValue([
-        { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, currencies: ['USD', 'CDF'] },
+        { code: 'MPESA', name: 'M-Pesa', available: true, currencies: ['USD', 'CDF'], phonePrefixes: ['81', '82', '83'] },
       ]),
     };
     payments = { resolvePayment: jest.fn().mockResolvedValue(undefined) };
@@ -102,7 +102,7 @@ describe('OrderService', () => {
     over: Partial<any> = {},
   ) => ({
     items,
-    operator: 'VODACOM_MPESA_COD',
+    operator: 'MPESA',
     phoneNumber: '243810000000',
     ...over,
   });
@@ -226,7 +226,7 @@ describe('OrderService', () => {
       paymentRef: ref1,
       amount: 250,
       currency: 'USD',
-      operator: 'VODACOM_MPESA_COD',
+      operator: 'MPESA',
       phoneNumber: '243810000000',
     }));
 
@@ -320,7 +320,7 @@ describe('OrderService', () => {
 
   it("opérateur ne supportant pas la devise de l'event → 400, pas de réservation ni initPayment", async () => {
     provider.getOperators.mockResolvedValue([
-      { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: true, currencies: ['USD'] },
+      { code: 'MPESA', name: 'M-Pesa', available: true, currencies: ['USD'] },
     ]);
     prisma.ticketCategory.findMany.mockResolvedValue([
       category({ event: { ...category().event, priceCurrency: 'CDF' } }),
@@ -333,12 +333,25 @@ describe('OrderService', () => {
 
   it('opérateur non disponible (available:false) → 400', async () => {
     provider.getOperators.mockResolvedValue([
-      { code: 'VODACOM_MPESA_COD', name: 'Vodacom M-Pesa', available: false, currencies: ['USD', 'CDF'] },
+      { code: 'MPESA', name: 'M-Pesa', available: false, currencies: ['USD', 'CDF'] },
     ]);
     prisma.ticketCategory.findMany.mockResolvedValue([category()]);
 
     await expect(service.createOrder('user-1', dto())).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('V4 : numéro d’un autre opérateur → 400, pas de réservation de stock ni initPayment', async () => {
+    prisma.ticketCategory.findMany.mockResolvedValue([category()]);
+
+    await expect(
+      service.createOrder(
+        'user-1',
+        dto(undefined, { phoneNumber: '243970000001' }),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provider.initPayment).not.toHaveBeenCalled();
   });
 
   it('refus explicite du fournisseur → commandes FAILED + stock relâché + 400', async () => {
