@@ -83,6 +83,11 @@ export const PAYMENT_PENDING_TTL_MINUTES = Number(
   process.env.PAYMENT_PENDING_TTL_MINUTES ?? 25,
 );
 
+// Garde-fou V1 : un checkout PENDING dont le statut reste introuvable (erreurs
+// fournisseur persistantes) au-delà de cette limite est expiré (stock relâché ;
+// un paiement tardif reste ré-honorable).
+export const PAYMENT_UNRESOLVED_HARD_LIMIT_HOURS = 24;
+
 // ─── Retrait / Payout organisateur (Lot 2) ────────────────────────────────────
 // Maturation : seules les ventes PAID de plus de N jours (calendaires) sont
 // retirables — laisse le temps au prefunding PawaPay (RDC ≈ T+5 j ouvrés) et

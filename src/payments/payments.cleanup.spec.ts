@@ -5,7 +5,7 @@ import { PaymentsService } from './payments.service';
 describe('PaymentsCleanupService', () => {
   let service: PaymentsCleanupService;
   let prisma: { order: { findMany: jest.Mock } };
-  let payments: { resolvePayment: jest.Mock };
+  let payments: { resolvePayment: jest.Mock; expireUnresolved: jest.Mock };
 
   beforeEach(() => {
     prisma = { order: { findMany: jest.fn().mockResolvedValue([]) } };
@@ -13,6 +13,7 @@ describe('PaymentsCleanupService', () => {
       resolvePayment: jest
         .fn()
         .mockResolvedValue({ paymentRef: 'r', status: 'EXPIRED' }),
+      expireUnresolved: jest.fn().mockResolvedValue(undefined),
     };
     service = new PaymentsCleanupService(
       prisma as unknown as PrismaService,
@@ -57,5 +58,29 @@ describe('PaymentsCleanupService', () => {
     prisma.order.findMany.mockResolvedValue([]);
     await service.reapExpiredPayments();
     expect(payments.resolvePayment).not.toHaveBeenCalled();
+  });
+
+  it('V1 : statut toujours introuvable au-delà de 24 h → expireUnresolved', async () => {
+    const old = new Date(Date.now() - 25 * 3_600_000);
+    prisma.order.findMany.mockResolvedValue([
+      { paymentRef: 'r1', createdAt: old },
+    ]);
+    payments.resolvePayment.mockRejectedValue(new Error('ARAKA 500'));
+
+    await service.reapExpiredPayments();
+
+    expect(payments.expireUnresolved).toHaveBeenCalledWith('r1');
+  });
+
+  it('V1 : statut introuvable depuis moins de 24 h → on attend (pas d’expiration forcée)', async () => {
+    const recent = new Date(Date.now() - 2 * 3_600_000);
+    prisma.order.findMany.mockResolvedValue([
+      { paymentRef: 'r1', createdAt: recent },
+    ]);
+    payments.resolvePayment.mockRejectedValue(new Error('ARAKA 500'));
+
+    await service.reapExpiredPayments();
+
+    expect(payments.expireUnresolved).not.toHaveBeenCalled();
   });
 });

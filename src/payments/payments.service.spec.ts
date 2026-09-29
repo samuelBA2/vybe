@@ -345,4 +345,16 @@ describe('PaymentsService.handleWebhook', () => {
       expect(res).toEqual(expect.objectContaining({ status: 'PAID' }));
     });
   });
+
+  describe('expireUnresolved (garde-fou V1)', () => {
+    it('expire les commandes PENDING du checkout et relâche le stock', async () => {
+      await service.expireUnresolved(PAYMENT_REF);
+      expect(tx.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', paymentStatus: 'PENDING' },
+        data: { paymentStatus: 'EXPIRED' },
+      });
+      expect(tx.$executeRaw).toHaveBeenCalled();
+      expect(provider.checkStatus).not.toHaveBeenCalled();
+    });
+  });
 });

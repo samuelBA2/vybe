@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { PAYMENT_PENDING_TTL_MINUTES } from 'src/common/constants';
+import {
+  PAYMENT_PENDING_TTL_MINUTES,
+  PAYMENT_UNRESOLVED_HARD_LIMIT_HOURS,
+} from 'src/common/constants';
 import { PaymentsService } from './payments.service';
 
 // Reaper d'expiration : filet de sécurité si l'acheteur abandonne ou si le callback
@@ -30,11 +33,14 @@ export class PaymentsCleanupService {
         createdAt: { lt: cutoff },
         paymentRef: { not: null },
       },
-      select: { paymentRef: true },
+      select: { paymentRef: true, createdAt: true },
       distinct: ['paymentRef'],
     });
 
-    for (const { paymentRef } of stale) {
+    const hardLimit = new Date(
+      Date.now() - PAYMENT_UNRESOLVED_HARD_LIMIT_HOURS * 3_600_000,
+    );
+    for (const { paymentRef, createdAt } of stale) {
       if (!paymentRef) continue;
       try {
         const res = await this.payments.resolvePayment(paymentRef, {
@@ -46,6 +52,19 @@ export class PaymentsCleanupService {
         this.logger.warn(
           `Reaper paiement : échec sur ${paymentRef}: ${String(err)}`,
         );
+        // V1 : statut introuvable depuis trop longtemps → on libère le stock.
+        if (createdAt < hardLimit) {
+          try {
+            await this.payments.expireUnresolved(paymentRef);
+            this.logger.error(
+              `Reaper paiement : ${paymentRef} expiré après ${PAYMENT_UNRESOLVED_HARD_LIMIT_HOURS} h sans statut fournisseur.`,
+            );
+          } catch (expireErr) {
+            this.logger.warn(
+              `Reaper paiement : expiration forcée impossible pour ${paymentRef}: ${String(expireErr)}`,
+            );
+          }
+        }
       }
     }
   }

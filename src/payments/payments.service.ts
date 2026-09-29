@@ -148,6 +148,17 @@ export class PaymentsService {
     return { paymentRef, status: await this.fulfill(orders) };
   }
 
+  // Garde-fou V1 (reaper) : expire un checkout dont le statut fournisseur reste
+  // introuvable au-delà de la limite dure. EXPIRED (≠ FAILED) : fulfill() pourra
+  // encore ré-honorer un paiement confirmé tardivement.
+  async expireUnresolved(paymentRef: string): Promise<void> {
+    const orders = (await this.prisma.order.findMany({
+      where: { paymentRef },
+      include: { ticketCategory: { include: { event: true } } },
+    })) as unknown as OrderWithEvent[];
+    await this.expire(orders);
+  }
+
   // Transition PAID atomique de toutes les commandes du checkout. Idempotent :
   // les commandes déjà PAID sont ignorées. Une commande EXPIRED (stock relâché par
   // le reaper) est re-honorée si le stock est de nouveau disponible, sinon REVIEW.
