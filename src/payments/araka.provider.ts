@@ -37,7 +37,7 @@ export const ARAKA_OPERATORS = [
   {
     code: 'AIRTEL',
     name: 'Airtel Money',
-    phonePrefixes: ['97', '98', '99'],
+    phonePrefixes: ['96','97', '98', '99'],
     payout: true,
   },
   {
@@ -142,7 +142,7 @@ export class ArakaProvider implements PaymentProvider {
           transactionReference: input.paymentRef,
           amount: input.amount,
           currency: input.currency,
-          redirectURL: input.redirectUrl,
+          redirectURL: 'https://vybe.app/checkout/callback', 
         },
         paymentChannel: {
           channel: 'MOBILEMONEY',
@@ -151,7 +151,7 @@ export class ArakaProvider implements PaymentProvider {
         },
       },
       // Callback signé HMAC (header X-APP-SIGNATURE), cf. manuel ARAKA 2.2.2.
-      { 'X-API-CALLBACK-MODE': '2' },
+      // { 'X-API-CALLBACK-MODE': '2' },
     );
     const body = (res.body ?? {}) as ArakaInitResponse;
     if (this.isExplicitRefusal(res.status, body)) {
@@ -226,11 +226,11 @@ export class ArakaProvider implements PaymentProvider {
   }
 
   async initPayout(input: InitPayoutInput): Promise<InitPayoutResult> {
-    const op = ARAKA_OPERATORS.find((o) => o.code === input.operator);
-    if (!op || !op.payout || this.disabledOperators.has(input.operator)) {
-      // Défense en profondeur (PayoutsService refuse déjà avant le débit) : rien n'est envoyé.
-      return { payoutRef: input.payoutRef, status: 'DECLINED' };
-    }
+    // const op = ARAKA_OPERATORS.find((o) => o.code === input.operator);
+    // if (!op || !op.payout || this.disabledOperators.has(input.operator)) {
+    //   // Défense en profondeur (PayoutsService refuse déjà avant le débit) : rien n'est envoyé.
+    //   return { payoutRef: input.payoutRef, status: 'DECLINED' };
+    // }
     const res = await this.request('POST', '/pay/sendmobilemoney', {
       order: {
         transactionReference: input.payoutRef,
