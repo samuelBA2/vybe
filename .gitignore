@@ -82,3 +82,7 @@ docs/legal/
 
 # Docs de conception / passation internes (non versionnés)
 DesignGoogleLogin.md
+
+# Docs architecturaux internes 
+architecture-backend.md
+architecture-backend.txt
