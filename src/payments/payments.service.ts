@@ -60,14 +60,18 @@ export class PaymentsService {
       throw new UnauthorizedException('Signature de webhook invalide.');
     }
 
-    // 2) Extraire NOTRE référence (depositId = paymentRef partagé du checkout).
-    let parsed: { depositId?: string };
+    // 2) Extraire NOTRE référence. PawaPay envoie `depositId` ; Araka renvoie
+    // `originatingTransactionId` (= transactionReference envoyé à l'initiation).
+    let parsed: { depositId?: string; originatingTransactionId?: string };
     try {
-      parsed = JSON.parse(rawBody) as { depositId?: string };
+      parsed = JSON.parse(rawBody) as {
+        depositId?: string;
+        originatingTransactionId?: string;
+      };
     } catch {
       throw new BadRequestException('Corps de webhook illisible.');
     }
-    const paymentRef = parsed.depositId;
+    const paymentRef = parsed.depositId || parsed.originatingTransactionId;
     if (!paymentRef) {
       throw new BadRequestException(
         'Référence de paiement absente du webhook.',

@@ -24,6 +24,7 @@ describe('OrderService', () => {
   let prisma: {
     ticketCategory: { findMany: jest.Mock };
     ticket: { findMany: jest.Mock };
+    user: { findUnique: jest.Mock };
     order: { updateMany: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -46,6 +47,14 @@ describe('OrderService', () => {
     prisma = {
       ticketCategory: { findMany: jest.fn() },
       ticket: { findMany: jest.fn().mockResolvedValue([]) },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          firstname: 'Ada',
+          lastname: 'Lovelace',
+          email: 'ada@vybe.test',
+          phone: '243810000000',
+        }),
+      },
       order: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn(),

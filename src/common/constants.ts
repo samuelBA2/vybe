@@ -61,8 +61,7 @@ export const MY_TICKETS_MAX_PER_SCOPE = 1000;
 
 // ─── Billetterie / commandes ──────────────────────────────────────────────────
 // Commission Vybe prélevée sur chaque commande (déduite de organizerAmount).
-// 20 % (V1 payout) : couvre les frais de décaissement Mobile Money absorbés par
-// Vybe au retrait. NON rétroactif : le split est figé par commande au PAID.
+// NON rétroactif : le split est figé par commande au PAID.
 export const PLATFORM_FEE_RATE = 0.2; // 20%
 
 // Nombre maximum de billets qu'un créateur peut OFFRIR par catégorie. Le
@@ -89,30 +88,6 @@ export const PAYMENT_PENDING_TTL_MINUTES = Number(
 // PawaPay à chaque fois (risque de rate-limit / coût / dispo). Les échecs ne
 // sont jamais mis en cache (voir PawaPayProvider.getOperators).
 export const PAWAPAY_OPERATORS_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
-
-// ─── Retrait / Payout organisateur (Lot 2) ────────────────────────────────────
-// Maturation : seules les ventes PAID de plus de N jours (calendaires) sont
-// retirables — laisse le temps au prefunding PawaPay (RDC ≈ T+5 j ouvrés) et
-// couvre une fenêtre remboursement/litige.
-export const PAYOUT_MATURATION_DAYS = Number(
-  process.env.PAYOUT_MATURATION_DAYS ?? 4,
-);
-
-// Plancher métier d'un retrait (USD). La borne réelle = max(ce plancher,
-// minAmount de l'opérateur lu depuis active-conf).
-export const PAYOUT_MIN_AMOUNT = Number(process.env.PAYOUT_MIN_AMOUNT ?? 2);
-
-// Filet DÉFENSIF (USD) : borne max de repli appliquée UNIQUEMENT si le plafond
-// de l'opérateur (active-conf PAYOUT) est indisponible/illisible — pour ne jamais
-// laisser passer un payout non borné. Sinon le maxAmount opérateur fait foi.
-export const PAYOUT_MAX_AMOUNT = Number(process.env.PAYOUT_MAX_AMOUNT ?? 2000);
-
-// Délai (minutes) au-delà duquel un Payout PENDING non résolu est re-vérifié par
-// le reaper puis, s'il traîne toujours, passé en REVIEW (un mouvement sortant ne
-// reste jamais non résolu).
-export const PAYOUT_STUCK_TTL_MINUTES = Number(
-  process.env.PAYOUT_STUCK_TTL_MINUTES ?? 30,
-);
 
 // ─── Photo de profil (avatar) ────────────────────────────────────────────────
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 Mo

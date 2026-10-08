@@ -147,6 +147,18 @@ describe('PaymentsService.handleWebhook', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it('callback Araka (originatingTransactionId) → même résolution que depositId', async () => {
+    mockCheck('COMPLETED', '200');
+    const rawBody = JSON.stringify({
+      originatingTransactionId: PAYMENT_REF,
+      statusCode: '200',
+      statusDescription: 'Approved',
+    });
+    const res = await service.handleWebhook(rawBody, signedCallback(rawBody));
+    expect(res).toEqual({ paymentRef: PAYMENT_REF, status: 'PAID' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('payé → PAID + billets + 2 écritures ledger (organizer + platform) par commande', async () => {
     mockCheck('COMPLETED', '200');
     const { rawBody, headers } = webhook();

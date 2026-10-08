@@ -1,42 +1,54 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaModule } from 'src/prisma/prisma.module';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { AuthModule } from 'src/auth/auth.module';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import { PawaPayProvider } from './pawapay.provider';
+import { ArakaProvider } from './araka.provider';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PaymentsConfigService } from './payments-config.service';
 import { PaymentsCleanupService } from './payments.cleanup';
 import { EarningsController } from './earnings.controller';
 import { EarningsService } from './earnings.service';
-import { PayoutsController } from './payouts.controller';
-import { PayoutsService } from './payouts.service';
-import { PayoutsCleanupService } from './payouts.cleanup';
-import { OtpModule } from 'src/otp/otp.module';
 
-// Module paiement. Le fournisseur concret (PawaPayProvider) est lié au token
-// d'injection PAYMENT_PROVIDER : tout le flux (createOrder, webhook, reaper,
-// comptabilité) dépend de l'interface via ce token, jamais de l'implémentation
-// → changer de fournisseur ne touche qu'à ce `useClass`.
+// Module paiement. Le fournisseur concret est lié au token PAYMENT_PROVIDER :
+// tout le flux (createOrder, webhook, reaper, comptabilité) dépend de
+// l'interface, jamais de l'implémentation. `PAYMENT_PROVIDER=araka|pawapay`
+// (défaut : araka) choisit l'implémentation.
 //
-// ConfigModule est global (token/base URL/clé publique via ConfigService) ;
+// ConfigModule est global (identifiants via ConfigService) ;
 // PrismaModule fournit PrismaService (audit PaymentProviderLog).
-//
-// Webhook (POST /payments/webhook) + service + reaper + comptabilité organisateur
-// (GET /me/earnings) + retrait (/me/payouts) branchés (Tasks 5, 7, 8, 10).
-// AuthModule fournit JwtService pour JwtAuthGuard/RolesGuard (EarningsController,
-// PayoutsController). À venir : enregistrement dans AppModule (Task 10 finale).
 @Module({
-  imports: [PrismaModule, AuthModule, OtpModule],
-  controllers: [PaymentsController, EarningsController, PayoutsController],
+  imports: [PrismaModule, AuthModule],
+  controllers: [PaymentsController, EarningsController],
   providers: [
-    { provide: PAYMENT_PROVIDER, useClass: PawaPayProvider },
+    {
+      provide: PAYMENT_PROVIDER,
+      useFactory: (config: ConfigService, prisma: PrismaService) => {
+        const which = (config.get<string>('PAYMENT_PROVIDER') ?? 'araka')
+          .trim()
+          .toLowerCase();
+        const logger = new Logger('PaymentsModule');
+        if (which === 'pawapay') {
+          logger.log('Fournisseur de paiement : PawaPay');
+          return new PawaPayProvider(config, prisma);
+        }
+        if (which === 'araka') {
+          logger.log('Fournisseur de paiement : Araka');
+          return new ArakaProvider(config, prisma);
+        }
+        throw new Error(
+          `PAYMENT_PROVIDER inconnu (« ${which} »). Valeurs acceptées : araka, pawapay.`,
+        );
+      },
+      inject: [ConfigService, PrismaService],
+    },
     PaymentsService,
     PaymentsConfigService,
     PaymentsCleanupService,
     EarningsService,
-    PayoutsService,
-    PayoutsCleanupService,
   ],
   exports: [PAYMENT_PROVIDER, PaymentsService],
 })

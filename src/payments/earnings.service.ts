@@ -1,36 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
-import {
-  PAYOUT_MATURATION_DAYS,
-  PLATFORM_FEE_RATE,
-  USD_TO_CDF_RATE,
-} from 'src/common/constants';
+import { PLATFORM_FEE_RATE, USD_TO_CDF_RATE } from 'src/common/constants';
 import { buildPage, KeysetCursor, Paginated } from 'src/common/pagination';
-import { payoutBounds } from 'src/common/money';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const MATURATION_MS = PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000;
 
-// Quantifie un montant dans sa devise : CDF en entiers (PawaPay refuse les
-// décimales), USD à 2 décimales.
+// Quantifie un montant dans sa devise : CDF en entiers, USD à 2 décimales.
 const quantize = (n: number, currency: $Enums.Currency) =>
   currency === 'CDF' ? Math.round(n) : round2(n);
 
-// Devises supportées (ordre stable pour getWithdrawableAll / l'UI).
+// Devises supportées (ordre stable pour l'UI).
 const CURRENCIES: $Enums.Currency[] = ['USD', 'CDF'];
 
-// Comptabilité organisateur (lecture seule V1). Le ledger est la SOURCE DE VÉRITÉ
+// Comptabilité organisateur (lecture seule). Le ledger est la SOURCE DE VÉRITÉ
 // des soldes ; les agrégats de commandes servent la ventilation (brut/commission/net).
 // MULTI-DEVISES : un organisateur peut détenir un solde USD ET un solde CDF, jamais
-// sommés entre eux (chaque devise se retire séparément). Le retrait (payout) = Lot 2.
+// sommés entre eux.
 @Injectable()
 export class EarningsService {
   constructor(private readonly prisma: PrismaService) {}
 
   // Solde PAR DEVISE : une entrée par devise ayant de l'activité (solde ledger OU
-  // ventes), avec balance + ventilation brut/commission/net + retirable. JAMAIS de
-  // somme inter-devises. Scope strict à l'utilisateur.
+  // ventes), avec balance + ventilation brut/commission/net. JAMAIS de somme
+  // inter-devises. Scope strict à l'utilisateur.
   async getSummary(userId: string) {
     // Solde = Σ des écritures ORGANIZER de l'utilisateur, groupé par devise.
     const balanceGroups = await this.prisma.ledgerEntry.groupBy({
@@ -57,107 +50,19 @@ export class EarningsService {
         soldGroups.some((g) => g.currency === c),
     );
 
-    const cutoff = new Date(Date.now() - MATURATION_MS);
-
-    const balances = await Promise.all(
-      currencies.map(async (currency) => {
-        const bal = balanceGroups.find((g) => g.currency === currency);
-        const sold = soldGroups.find((g) => g.currency === currency);
-        const { withdrawable } = await this.getWithdrawable(userId, currency);
-        const { maturingAmount, nextMaturesAt } = await this.getNextMaturation(
-          userId,
-          currency,
-          cutoff,
-        );
-        return {
-          currency,
-          balance: quantize(bal?._sum.amount ?? 0, currency),
-          gross: quantize(sold?._sum.totalAmount ?? 0, currency),
-          commission: quantize(sold?._sum.platformFee ?? 0, currency),
-          net: quantize(sold?._sum.organizerAmount ?? 0, currency),
-          withdrawable,
-          // Seuil minimum de retrait DANS cette devise (front : « Retrait dès X »).
-          minWithdrawal: payoutBounds(currency).min,
-          // Fonds encore en maturation + date de déblocage de la plus ancienne
-          // vente non maturée (front : « le reste dispo le … »). null si tout est mûr.
-          maturingAmount,
-          nextMaturesAt,
-        };
-      }),
-    );
+    const balances = currencies.map((currency) => {
+      const bal = balanceGroups.find((g) => g.currency === currency);
+      const sold = soldGroups.find((g) => g.currency === currency);
+      return {
+        currency,
+        balance: quantize(bal?._sum.amount ?? 0, currency),
+        gross: quantize(sold?._sum.totalAmount ?? 0, currency),
+        commission: quantize(sold?._sum.platformFee ?? 0, currency),
+        net: quantize(sold?._sum.organizerAmount ?? 0, currency),
+      };
+    });
 
     return { balances };
-  }
-
-  // Fonds de vente PAS ENCORE maturés d'une devise (createdAt > cutoff) : leur
-  // montant + la date de maturation de la PLUS ANCIENNE vente en attente
-  // (createdAt + délai). Sert l'affichage « le reste dispo le … » côté wallet.
-  private async getNextMaturation(
-    userId: string,
-    currency: $Enums.Currency,
-    cutoff: Date,
-  ): Promise<{ maturingAmount: number; nextMaturesAt: string | null }> {
-    const pending = await this.prisma.ledgerEntry.aggregate({
-      _sum: { amount: true },
-      _min: { createdAt: true },
-      where: {
-        userId,
-        account: 'ORGANIZER',
-        type: 'SALE_ORGANIZER',
-        currency,
-        createdAt: { gt: cutoff },
-      },
-    });
-    const earliest = pending._min.createdAt;
-    return {
-      maturingAmount: quantize(pending._sum.amount ?? 0, currency),
-      nextMaturesAt: earliest
-        ? new Date(earliest.getTime() + MATURATION_MS).toISOString()
-        : null,
-    };
-  }
-
-  // Solde RETIRABLE d'UNE devise (≠ solde total créance). Seules les ventes
-  // maturées comptent côté crédit ; les payouts (débits + reversals) comptent
-  // immédiatement. Un débit est donc toujours adossé à du crédit maturé. Jamais < 0.
-  async getWithdrawable(
-    userId: string,
-    currency: $Enums.Currency,
-  ): Promise<{ currency: $Enums.Currency; withdrawable: number }> {
-    const cutoff = new Date(
-      Date.now() - PAYOUT_MATURATION_DAYS * 24 * 60 * 60 * 1000,
-    );
-
-    const maturedCredits = await this.prisma.ledgerEntry.aggregate({
-      _sum: { amount: true },
-      where: {
-        userId,
-        account: 'ORGANIZER',
-        type: 'SALE_ORGANIZER',
-        currency,
-        createdAt: { lte: cutoff },
-      },
-    });
-
-    const payouts = await this.prisma.ledgerEntry.aggregate({
-      _sum: { amount: true },
-      where: {
-        userId,
-        account: 'ORGANIZER',
-        type: { in: ['PAYOUT_ORGANIZER', 'PAYOUT_REVERSAL'] },
-        currency,
-      },
-    });
-
-    const raw = (maturedCredits._sum.amount ?? 0) + (payouts._sum.amount ?? 0);
-    return { currency, withdrawable: Math.max(0, quantize(raw, currency)) };
-  }
-
-  // Retirable des DEUX devises (pour l'UI : affiche USD et CDF séparément).
-  async getWithdrawableAll(
-    userId: string,
-  ): Promise<{ currency: $Enums.Currency; withdrawable: number }[]> {
-    return Promise.all(CURRENCIES.map((c) => this.getWithdrawable(userId, c)));
   }
 
   // Recettes PAR ÉVÉNEMENT (lecture seule). Order n'a pas d'eventId : on agrège

@@ -29,6 +29,21 @@ export class OrderService {
         private readonly payments: PaymentsService,
     ){}
     async createOrder(userId: string, dto: CreateOrderDto){
+
+        const buyer = await this.prisma.user.findUnique({
+            where: { id: userId },
+            select: { firstname: true, lastname: true, email: true, phone: true },
+        });
+
+        if (!buyer) {
+            throw new NotFoundException(`User not found`);
+        }
+
+        const customerFullName = [buyer?.firstname, buyer?.lastname]
+            .map((part) => part?.trim())
+            .filter((part): part is string => !!part)
+            .join(' ');
+
         const items = dto.items;
 
         // Le panier agrège déjà par catégorie : un doublon est une anomalie client.
@@ -77,11 +92,15 @@ export class OrderService {
         // stock si l'opérateur choisi n'existe pas / n'est pas disponible / ne gère
         // pas la devise de l'événement (supprime le cas le plus fréquent d'échec
         // fournisseur, ex. AMOUNT_OUT_OF_BOUNDS par incohérence de devise).
-        const operators = await this.payment.getOperators();
-        const op = operators.find((o) => o.code === dto.operator);
-        if (!op || !op.available || !op.currencies.includes(currency)) {
-            throw new BadRequestException('Opérateur indisponible pour cette devise.');
-        }
+        
+        // const operators = await this.payment.getOperators();
+        // const op = operators.find((o) => o.code === dto.operator);
+        // if (!op || !op.available || !op.currencies.includes(currency)) {
+        //     throw new BadRequestException('Opérateur indisponible pour cette devise.');
+        // }
+
+        // Identité acheteur : Araka l'exige (customerFullName). PawaPay l'ignore.
+       
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
         const paymentRef = randomUUID();
@@ -137,6 +156,9 @@ export class OrderService {
                 phoneNumber: dto.phoneNumber,
                 redirectUrl: `${process.env.API_BASE_URL ?? ''}/payments/webhook`,
                 description: 'Vybe billets',
+                customerFullName: customerFullName || undefined,
+                customerEmail: buyer?.email ?? undefined,
+                customerPhone: buyer?.phone ?? undefined,
             });
         } catch {
             // Échec de l'initiation : compensation — commandes FAILED + stock relâché

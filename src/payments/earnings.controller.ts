@@ -8,8 +8,8 @@ interface AuthedRequest {
   user: { sub: string };
 }
 
-// Comptabilité organisateur (profil → page « Comptabilité », lecture seule V1).
-// Scope strict à l'utilisateur connecté (req.user.sub). Retrait = Lot 2.
+// Comptabilité organisateur (profil → page « Comptabilité », lecture seule).
+// Scope strict à l'utilisateur connecté (req.user.sub).
 @UseGuards(JwtAuthGuard)
 @Controller('me')
 export class EarningsController {

@@ -33,7 +33,6 @@ model User {
   orders Order[]
   notifications Notification[]
   ledgerEntries LedgerEntry[]
-  payouts Payout[]
 
   otpVerications OtpVerification[]
 
@@ -298,7 +297,7 @@ enum Currency {
 
 // Type de compte comptable virtuel d'une écriture de ledger.
 enum LedgerAccount {
-  ORGANIZER // dette de Vybe envers l'organisateur (IOU) = solde retirable (Lot 2)
+  ORGANIZER // dette de Vybe envers l'organisateur (IOU)
   PLATFORM  // revenu de Vybe (commission 20 %)
 }
 
@@ -306,9 +305,7 @@ enum LedgerAccount {
 enum LedgerEntryType {
   SALE_ORGANIZER   // crédit organisateur au PAID (+)
   SALE_PLATFORM    // crédit plateforme au PAID (+)
-  REFUND_ORGANIZER // (Lot 2) débit organisateur sur remboursement (-)
-  PAYOUT_ORGANIZER // (Lot 2) débit organisateur sur retrait Mobile Money (-)
-  PAYOUT_REVERSAL   // (Lot 2) re-crédit organisateur sur échec de payout (+)
+  REFUND_ORGANIZER // débit organisateur sur remboursement (-)
 }
 
 // Écriture de ledger = SOURCE DE VÉRITÉ des soldes. Écrite dans la MÊME transaction que la
@@ -321,48 +318,15 @@ model LedgerEntry {
   userId    String 
   user      User            @relation(fields: [userId], references: [id]) 
   type      LedgerEntryType
-  amount    Float           // SIGNÉ : crédits > 0, débits (payout/refund) < 0
-  currency  Currency        @default(USD) // multi-devises : écrit dans la devise de la commande/du retrait
+  amount    Float           // SIGNÉ : crédits > 0, débits (refund) < 0
+  currency  Currency        @default(USD) // multi-devises : écrit dans la devise de la commande
   orderId   String?
   eventId   String?
   createdAt DateTime        @default(now())
-  payoutId  String?         // rattache PAYOUT_ORGANIZER / PAYOUT_REVERSAL à un Payout
-  payout    Payout?         @relation(fields: [payoutId], references: [id])
 
   @@index([userId, account])   // solde par compte
   @@index([userId, createdAt]) // historique keyset
   @@index([orderId])           // réconciliation par commande
-  @@index([payoutId])
-}
-
-// Retrait organisateur (payout Mobile Money). Le débit ledger PAYOUT_ORGANIZER est
-// écrit à la confirmation OTP (réservation), le PAYOUT_REVERSAL sur échec. Le numéro
-// destinataire est stocké en clair (mouvement d'argent sortant : traçabilité/support).
-model Payout {
-  id               String       @id @default(uuid())
-  payoutRef        String       @unique
-  userId           String
-  user             User         @relation(fields: [userId], references: [id])
-  currency         Currency     @default(USD) // devise du retrait (= devise de l'événement source)
-  amount           Float        // montant retiré, dans `currency` (entier si CDF)
-  operator         String       // code opérateur PawaPay
-  destination      String       // numéro MoMo (en clair)
-  status           PayoutStatus @default(PENDING)
-  providerPayoutId String?
-  createdAt        DateTime     @default(now())
-  resolvedAt       DateTime?
-
-  ledgerEntries    LedgerEntry[]
-
-  @@index([userId, createdAt]) // historique keyset
-  @@index([status])            // reaper
-}
-
-enum PayoutStatus {
-  PENDING
-  COMPLETED
-  FAILED
-  REVIEW   // mouvement sortant non résolvable automatiquement : résolution manuelle
 }
 
 // Journal d'audit générique des échanges avec le fournisseur (séparé du ledger).

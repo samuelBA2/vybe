@@ -27,11 +27,15 @@ export interface InitPaymentInput {
   redirectUrl?: string;
   // Libellé présenté à l'acheteur, le cas échéant.
   description?: string;
-  // Champs spécifiques au PUSH Mobile Money (modèle B, ex. PawaPay). Optionnels au
-  // niveau du contrat (un checkout hébergé les ignore) mais REQUIS par un provider
-  // push, qui les valide à l'exécution.
-  operator?: string; // code opérateur du fournisseur (ex. VODACOM_MPESA_COD)
+  // Champs spécifiques au PUSH Mobile Money (modèle B, ex. PawaPay / Araka).
+  // Optionnels au niveau du contrat (un checkout hébergé les ignore) mais REQUIS
+  // par un provider push, qui les valide à l'exécution.
+  operator?: string; // code opérateur du fournisseur (ex. MPESA, VODACOM_MPESA_COD)
   phoneNumber?: string; // numéro Mobile Money, chiffres uniquement, sans préfixe
+  // Identité acheteur. Requis par Araka (customerFullName) ; ignoré par PawaPay.
+  customerFullName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
 }
 
 export interface InitPaymentResult {
@@ -39,25 +43,6 @@ export interface InitPaymentResult {
   paymentRef: string;
   // Présent UNIQUEMENT en checkout hébergé (modèle A). Absent en push (modèle B).
   paymentUrl?: string;
-}
-
-// Entrée d'un payout (décaissement vers un destinataire Mobile Money). `amount`
-// exprimé dans `currency` (entier si CDF). `phoneNumber` = numéro destinataire.
-export interface InitPayoutInput {
-  payoutRef: string;
-  amount: number;
-  currency: ProviderCurrency;
-  operator: string;
-  phoneNumber: string;
-  description?: string;
-}
-
-export interface InitPayoutResult {
-  payoutRef: string;
-  providerPayoutId?: string;
-  // Statut immédiat renvoyé par le fournisseur à l'initiation (ACCEPTED → PENDING
-  // côté nous ; DECLINED → échec d'init).
-  status: ProviderStatus;
 }
 
 export interface CheckStatusResult {
@@ -114,13 +99,6 @@ export interface PaymentProvider {
 
   // Liste les opérateurs Mobile Money disponibles pour le pays cible (dépôts).
   getOperators(): Promise<ProviderOperator[]>;
-
-  // Initie un décaissement vers un destinataire Mobile Money. ACCEPTED → en cours
-  // (résolution async) ; DECLINED → init refusée (le service re-crédite + FAILED).
-  initPayout(input: InitPayoutInput): Promise<InitPayoutResult>;
-
-  // Re-vérifie le statut d'un payout côté serveur = source de vérité.
-  checkPayoutStatus(payoutRef: string): Promise<CheckStatusResult>;
 }
 
 // Token d'injection Nest. L'implémentation concrète est liée à ce token en Task 3b :

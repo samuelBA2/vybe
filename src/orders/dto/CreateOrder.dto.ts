@@ -22,9 +22,9 @@ export class CreateOrderDto {
     @Type(() => OrderItemDto)
     items : OrderItemDto[];
 
-    // ─── Push Mobile Money (PawaPay) ────────────────────────────────────────────
-    // Code opérateur du fournisseur (ex. VODACOM_MPESA_COD). Fourni par le frontend
-    // depuis la liste des opérateurs disponibles.
+    // ─── Push Mobile Money ──────────────────────────────────────────────────────
+    // Code opérateur renvoyé par GET /payments/config (ex. MPESA chez Araka,
+    // VODACOM_MPESA_COD chez PawaPay).
     @IsString()
     @Matches(/^[A-Z0-9_]+$/, { message: 'Opérateur Mobile Money invalide.' })
     operator : string;
