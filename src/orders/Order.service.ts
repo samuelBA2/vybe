@@ -93,11 +93,11 @@ export class OrderService {
         // pas la devise de l'événement (supprime le cas le plus fréquent d'échec
         // fournisseur, ex. AMOUNT_OUT_OF_BOUNDS par incohérence de devise).
         
-        // const operators = await this.payment.getOperators();
-        // const op = operators.find((o) => o.code === dto.operator);
-        // if (!op || !op.available || !op.currencies.includes(currency)) {
-        //     throw new BadRequestException('Opérateur indisponible pour cette devise.');
-        // }
+        const operators = await this.payment.getOperators();
+        const op = operators.find((o) => o.code === dto.operator);
+        if (!op || !op.available || !op.currencies.includes(currency)) {
+            throw new BadRequestException('Opérateur indisponible pour cette devise.');
+        }
 
         // Identité acheteur : Araka l'exige (customerFullName). PawaPay l'ignore.
        

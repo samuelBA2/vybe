@@ -12,6 +12,7 @@ import {
   ProviderOperator,
   ProviderStatus,
 } from './payment-provider.interface';
+import { ARAKA_HTTP_TIMEOUT_MS } from 'src/common/constants';
 
 // Réponse Araka à POST /api/login.
 interface ArakaLoginResponse {
@@ -233,8 +234,15 @@ export class ArakaProvider implements PaymentProvider {
         { method: 'GET' },
       );
     } catch (err) {
-      this.logger.error(`${direction} fetch a échoué: ${String(err)}`);
-      throw new Error('Araka injoignable (statut).');
+      const timeout = err instanceof Error && err.name === 'TimeoutError';
+      this.logger.error(
+        `${direction} fetch a échoué${timeout ? ' (timeout)' : ''}: ${String(err)}`,
+      );
+      throw new Error(
+        timeout
+          ? 'Araka injoignable (statut, timeout).'
+          : 'Araka injoignable (statut).',
+      );
     }
 
     let body: ArakaStatusResponse | undefined;
@@ -273,8 +281,13 @@ export class ArakaProvider implements PaymentProvider {
         body: JSON.stringify(body),
       });
     } catch (err) {
-      this.logger.error(`${direction} fetch a échoué: ${String(err)}`);
-      throw new Error('Araka injoignable.');
+      const timeout = err instanceof Error && err.name === 'TimeoutError';
+      this.logger.error(
+        `${direction} fetch a échoué${timeout ? ' (timeout)' : ''}: ${String(err)}`,
+      );
+      throw new Error(
+        timeout ? 'Araka injoignable (timeout).' : 'Araka injoignable.',
+      );
     }
 
     let data: T | undefined;
@@ -300,6 +313,7 @@ export class ArakaProvider implements PaymentProvider {
     const token = await this.bearer();
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...init,
+      signal: AbortSignal.timeout(ARAKA_HTTP_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -329,6 +343,7 @@ export class ArakaProvider implements PaymentProvider {
     try {
       res = await fetch(`${this.baseUrl}${this.loginPath}`, {
         method: 'POST',
+        signal: AbortSignal.timeout(ARAKA_HTTP_TIMEOUT_MS),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           emailAddress: this.email,
@@ -336,8 +351,15 @@ export class ArakaProvider implements PaymentProvider {
         }),
       });
     } catch (err) {
-      this.logger.error(`login fetch a échoué: ${String(err)}`);
-      throw new Error('Araka injoignable (login).');
+      const timeout = err instanceof Error && err.name === 'TimeoutError';
+      this.logger.error(
+        `login fetch a échoué${timeout ? ' (timeout)' : ''}: ${String(err)}`,
+      );
+      throw new Error(
+        timeout
+          ? 'Araka injoignable (login, timeout).'
+          : 'Araka injoignable (login).',
+      );
     }
     let data: ArakaLoginResponse | undefined;
     try {

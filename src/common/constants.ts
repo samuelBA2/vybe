@@ -15,6 +15,10 @@ export const LOGIN_LOCK_DURATIONS_MS = [
   12 * 60 * 60 * 1000, // palier 3+ : 12 heures
 ];
 
+// Timeout (ms) des appels HTTP sortants vers Araka (login, paymentrequest,
+// status). Au-delà, le fetch est abandonné proprement → échec rapide plutôt
+// qu'un POST /order gelé des dizaines de secondes (cold start Azure UAT).
+export const ARAKA_HTTP_TIMEOUT_MS = Number(process.env.ARAKA_HTTP_TIMEOUT_MS ?? 15_000); // 15 s
 
 // Alphabet SANS caractères ambigus (pas de 0/O ni 1/I) : un code lisible,
 // dictable au téléphone sans confusion. 32 caractères.
