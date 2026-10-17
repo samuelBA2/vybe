@@ -77,6 +77,10 @@ docs/passation.md
 # Documents légaux (non versionnés)
 docs/legal/
 
+# Doc d'architecture/onboarding interne (non versionnée)
+docs/architecture-backend.md
+docs/architecture-backend.txt
+
 # Outillage local Claude Code
 .claude/
 
