@@ -180,6 +180,21 @@ describe('ArakaProvider', () => {
     );
   });
 
+  // Araka enveloppe la réponse du reporting dans un tableau : [{ ... }].
+  // L'init, elle, renvoie un objet nu — d'où le piège. On doit déballer.
+  it('checkStatus déballe le tableau renvoyé par le reporting Araka', async () => {
+    mockLogin();
+    fetchMock.mockResolvedValueOnce(
+      fakeResponse([
+        { statusCode: '200', status: 'APPROVED', amount: '12.5', currency: 'USD' },
+      ]),
+    );
+    const res = await provider.checkStatus(payment.paymentRef);
+    expect(res.status).toBe('APPROVED');
+    expect(res.amount).toBe(12.5);
+    expect(res.currency).toBe('USD');
+  });
+
   it('statut introuvable (404) → PENDING', async () => {
     mockLogin();
     fetchMock.mockResolvedValueOnce(fakeResponse({}, false, 404));
