@@ -550,4 +550,121 @@ export class MailService {
       );
     }
   }
+
+  // Alerte l'équipe Vybe qu'un organisateur réclame son net (retrait MANUEL :
+  // c'est Vybe qui envoie l'argent). Le mail EST le canal (aucune persistance).
+  // Le montant est celui recalculé serveur — jamais une valeur fournie par le
+  // client. `replyTo` = l'email de l'organisateur quand il en a un.
+  async sendPayoutClaimEmail(params: {
+    user: {
+      id: string;
+      firstname: string | null;
+      lastname: string | null;
+      email: string | null;
+      phone: string | null;
+    };
+    currency: 'USD' | 'CDF';
+    amount: number;
+    mmoNumber: string;
+  }): Promise<void> {
+    const escapeHtml = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    // CDF sans décimale, USD à 2 décimales ; format français (ex. « 12 000 CDF »).
+    const amountRounded =
+      params.currency === 'CDF'
+        ? Math.round(params.amount)
+        : Math.round(params.amount * 100) / 100;
+    const amountLabel = `${amountRounded.toLocaleString('fr-FR', {
+      minimumFractionDigits: params.currency === 'CDF' ? 0 : 2,
+      maximumFractionDigits: params.currency === 'CDF' ? 0 : 2,
+    })} ${params.currency}`;
+
+    const fullName =
+      [params.user.firstname, params.user.lastname]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || '(nom non renseigné)';
+    const safeName = escapeHtml(fullName);
+    const safeEmail = escapeHtml(params.user.email ?? '—');
+    const safePhone = escapeHtml(params.user.phone ?? '—');
+    const safeMmo = escapeHtml(params.mmoNumber);
+    const safeAmount = escapeHtml(amountLabel);
+
+    // Destinataire = boîte de l'équipe Vybe (même fallback que la modération/contact).
+    const to =
+      this.config.get<string>('VYBE_TEAM_EMAIL') ??
+      process.env.SENDGRID_FROM_EMAIL!;
+
+    const msg = {
+      to,
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL!,
+        name: process.env.SENDGRID_FROM_NAME || 'Vybe Team',
+      },
+      // Répondre tombe sur l'organisateur quand il a un email.
+      ...(params.user.email ? { replyTo: params.user.email } : {}),
+      subject: `[Retrait net] ${fullName} réclame ${amountLabel}`,
+      text:
+        `Demande de retrait du net (envoi Mobile Money manuel par Vybe).\n\n` +
+        `Organisateur : ${fullName}\n` +
+        `User ID : ${params.user.id}\n` +
+        `Email : ${params.user.email ?? '—'}\n` +
+        `Téléphone : ${params.user.phone ?? '—'}\n\n` +
+        `Montant à envoyer : ${amountLabel}\n` +
+        `Numéro Mobile Money de réception : ${params.mmoNumber}\n\n` +
+        `Vérifier l'identité et le solde avant d'effectuer l'envoi.`,
+      html: `
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#0d0d0d;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d0d0d;padding:40px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#141414;border-radius:16px;overflow:hidden;">
+        <tr><td align="center" style="background:linear-gradient(135deg,#7B2FF7,#F107A3);padding:32px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">Demande de retrait du net</h1>
+        </td></tr>
+        <tr><td style="padding:32px 40px;">
+          <p style="color:#ccc;margin:0 0 24px;font-size:15px;line-height:1.7;">
+            Cet organisateur réclame son solde net. <b style="color:#fff;">Envoi Mobile Money à effectuer manuellement par Vybe.</b>
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:10px;">
+            <tr><td style="padding:14px 16px;color:#888;font-size:13px;">Organisateur</td><td style="padding:14px 16px;color:#fff;font-size:13px;">${safeName}</td></tr>
+            <tr><td style="padding:14px 16px;color:#888;font-size:13px;">Email</td><td style="padding:14px 16px;color:#fff;font-size:13px;">${safeEmail}</td></tr>
+            <tr><td style="padding:14px 16px;color:#888;font-size:13px;">Téléphone</td><td style="padding:14px 16px;color:#fff;font-size:13px;">${safePhone}</td></tr>
+            <tr><td style="padding:14px 16px;color:#888;font-size:13px;">User ID</td><td style="padding:14px 16px;color:#666;font-size:12px;">${escapeHtml(params.user.id)}</td></tr>
+          </table>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px;background:#1a1a1a;border-radius:10px;border:1px solid #F107A3;">
+            <tr><td style="padding:16px;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Montant à envoyer</td><td style="padding:16px;color:#fff;font-size:18px;font-weight:bold;text-align:right;">${safeAmount}</td></tr>
+            <tr><td style="padding:16px;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Numéro de réception</td><td style="padding:16px;color:#fff;font-size:16px;font-weight:bold;text-align:right;">${safeMmo}</td></tr>
+          </table>
+          <p style="color:#888;margin:24px 0 0;font-size:13px;line-height:1.6;">
+            Vérifier l'identité de l'organisateur et la cohérence du solde avant tout envoi.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`,
+    };
+
+    try {
+      await sgMail.send(msg);
+      this.logger.log(
+        `Mail de demande de retrait relayé (user ${params.user.id}, ${amountLabel})`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'envoi du mail de retrait : ${error.message}`,
+      );
+      throw new InternalServerErrorException(
+        'Impossible de transmettre ta demande, réessaye.',
+      );
+    }
+  }
 }
