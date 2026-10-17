@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuthModule } from 'src/auth/auth.module';
+import { MailModule } from 'src/mail/mail.module';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import { PawaPayProvider } from './pawapay.provider';
 import { ArakaProvider } from './araka.provider';
@@ -12,6 +13,8 @@ import { PaymentsConfigService } from './payments-config.service';
 import { PaymentsCleanupService } from './payments.cleanup';
 import { EarningsController } from './earnings.controller';
 import { EarningsService } from './earnings.service';
+import { PayoutsController } from './payouts.controller';
+import { PayoutsService } from './payouts.service';
 
 // Module paiement. Le fournisseur concret est lié au token PAYMENT_PROVIDER :
 // tout le flux (createOrder, webhook, reaper, comptabilité) dépend de
@@ -21,8 +24,8 @@ import { EarningsService } from './earnings.service';
 // ConfigModule est global (identifiants via ConfigService) ;
 // PrismaModule fournit PrismaService (audit PaymentProviderLog).
 @Module({
-  imports: [PrismaModule, AuthModule],
-  controllers: [PaymentsController, EarningsController],
+  imports: [PrismaModule, AuthModule, MailModule],
+  controllers: [PaymentsController, EarningsController, PayoutsController],
   providers: [
     {
       provide: PAYMENT_PROVIDER,
@@ -49,6 +52,7 @@ import { EarningsService } from './earnings.service';
     PaymentsConfigService,
     PaymentsCleanupService,
     EarningsService,
+    PayoutsService,
   ],
   exports: [PAYMENT_PROVIDER, PaymentsService],
 })
