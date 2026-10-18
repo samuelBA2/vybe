@@ -86,3 +86,6 @@ docs/architecture-backend.txt
 
 # Docs de conception / passation internes (non versionnés)
 DesignGoogleLogin.md
+
+architecture-backend.md
+architecture-backend.txt
