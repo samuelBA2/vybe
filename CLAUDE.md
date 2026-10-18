@@ -100,6 +100,8 @@ Jest config in `package.json` includes `moduleNameMapper: { "^src/(.*)$": "<root
 
 - **Scan antivirus des PDF uploadés** — `POST /uploads` (`UploadsService`) accepte `application/pdf` (`ALLOWED_MIME` dans `src/common/constants.ts`) mais NE scanne PAS encore les PDF infectés/piégés. À implémenter avant la prod. Options évaluées : ClamAV/`clamscan` (vrai AV, nécessite un démon `clamd` — pas fourni par Render/Neon par défaut) ; scan heuristique sans infra (détecter `/JavaScript`, `/JS`, `/Launch`, `/OpenAction`, `/EmbeddedFile` dans le buffer) ; API externe (VirusTotal, expose le fichier à un tiers). Décision reportée. **Rappeler ce point à l'utilisateur au moment de préparer la prod.**
 
+- **Secret partagé du webhook Araka** — en l'absence de `ARAKA_WEBHOOK_SECRET`, le backend accepte les callbacks Araka SANS vérifier de signature (`ArakaProvider.verifyWebhookSignature` → warning au démarrage/réception). Ce n'est pas bloquant (la confirmation réelle passe par `checkStatus`, source de vérité — un faux callback ne peut pas valider un paiement), mais avant la prod : demander au support Araka si les callbacks peuvent renvoyer un secret dans le header `x-araka-secret` (ou `x-webhook-secret`). **Si oui** → définir `ARAKA_WEBHOOK_SECRET` (env Render + config Araka, mêmes valeurs) pour activer la vérification. **Si non** → NE PAS définir la variable (sinon tous les callbacks réels seraient rejetés) ; documenter que la confirmation repose sur `checkStatus`. **Rappeler ce point à l'utilisateur au moment de préparer la prod.**
+
 ## Instructions
 
 - Ne pas ajouter "Co-Authored-By" dans les messages de commit git.
