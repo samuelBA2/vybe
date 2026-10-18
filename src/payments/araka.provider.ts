@@ -245,9 +245,15 @@ export class ArakaProvider implements PaymentProvider {
       );
     }
 
+    // Le reporting Araka enveloppe la transaction dans un tableau ([{ ... }]),
+    // contrairement à l'init qui renvoie un objet nu. On déballe l'élément [0]
+    // (on tolère aussi un objet nu, au cas où le contrat changerait).
     let body: ArakaStatusResponse | undefined;
     try {
-      body = (await res.json()) as ArakaStatusResponse;
+      const parsed: unknown = await res.json();
+      body = (Array.isArray(parsed) ? parsed[0] : parsed) as
+        | ArakaStatusResponse
+        | undefined;
     } catch {
       body = undefined;
     }
