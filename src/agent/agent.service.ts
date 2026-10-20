@@ -4,6 +4,7 @@ import { randomCode } from 'src/common/generate-code';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
+import { encryptAgentCode, decryptAgentCode } from 'src/common/agent-code-cipher';
 import { MAX_AGENTS_PER_EVENT, PLATFORM_FEE_RATE, APP_TIMEZONE } from 'src/common/constants';
 import { ScanDashboardResponseDto } from './dto/ScanDashboard.dto';
 
@@ -42,6 +43,7 @@ export class AgentService {
         firstname : dto.firstname,
         lastname : dto.lastname,
         hashCode: hashCode(code),
+        codeEnc: encryptAgentCode(code), // chiffré pour réaffichage à l'organisateur
         eventId: event.id
       }
     });
@@ -61,7 +63,7 @@ export class AgentService {
   if (event.createdById !== userId) {
     throw new ForbiddenException('Vous ne gérez pas cet événement.');
   }
-  return this.prisma.agent.findMany({
+  const rows = await this.prisma.agent.findMany({
     where: { eventId: event.id },
     select: {
       id: true,
@@ -70,8 +72,12 @@ export class AgentService {
       active: true,
       usedAt: true,
       createdAt: true,
+      codeEnc: true,
     },
   });
+  // Déchiffre le code pour que l'organisateur puisse le redonner à l'agent.
+  // `code` est null pour les agents créés avant cette feature (codeEnc absent).
+  return rows.map(({ codeEnc, ...rest }) => ({ ...rest, code: decryptAgentCode(codeEnc) }));
 }
 
   async deleteAgent(userId: string, agentId: string){

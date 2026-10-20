@@ -378,7 +378,8 @@ model Agent {
   id          String    @id @default(uuid())
   firstname   String
   lastname    String
-  hashCode    String    @unique // identifie l'agent avec un SHA-256 du code "AG-XXXXXXXX"  
+  hashCode    String    @unique // identifie l'agent avec un SHA-256 du code "AG-XXXXXXXX"
+  codeEnc     String?   // code "AG-XXXXXXXX" chiffré (AES-256-GCM) pour le réafficher à l'organisateur (null = agents créés avant cette feature)
   active      Boolean   @default(true)
   usedAt      DateTime?
   createdAt   DateTime  @default(now())

@@ -7,7 +7,11 @@ import {
 import { AgentService } from './agent.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { hashCode } from 'src/common/hash-code';
+import { encryptAgentCode } from 'src/common/agent-code-cipher';
 import { MAX_AGENTS_PER_EVENT } from 'src/common/constants';
+
+// Le chiffrement des codes agent dérive sa clé de AGENT_CODE_SECRET/JWT_SECRET.
+process.env.JWT_SECRET ??= 'test-agent-code-secret';
 
 describe('AgentService', () => {
   let service: AgentService;
@@ -136,14 +140,21 @@ describe('AgentService', () => {
       await expect(service.listAgents('user-1', 'VYBE-8JGBLV')).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('propriétaire → renvoie les agents de l’événement', async () => {
+    it('propriétaire → renvoie les agents, code déchiffré (null si codeEnc absent)', async () => {
       prisma.event.findUnique.mockResolvedValue({ id: 'event-1', createdById: 'user-1' });
-      prisma.agent.findMany.mockResolvedValue([{ id: 'agent-1' }]);
+      prisma.agent.findMany.mockResolvedValue([
+        { id: 'agent-1', codeEnc: encryptAgentCode('AG-ABCD2345') }, // code récupérable
+        { id: 'agent-2', codeEnc: null }, // agent créé avant la feature
+      ]);
       const res = await service.listAgents('user-1', 'VYBE-8JGBLV');
       expect(prisma.agent.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { eventId: 'event-1' } }),
       );
-      expect(res).toEqual([{ id: 'agent-1' }]);
+      // codeEnc ne fuite pas tel quel ; on expose le code en clair (ou null).
+      expect(res).toEqual([
+        { id: 'agent-1', code: 'AG-ABCD2345' },
+        { id: 'agent-2', code: null },
+      ]);
     });
   });
 
