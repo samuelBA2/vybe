@@ -43,11 +43,11 @@ export class PayoutsService {
     currency: $Enums.Currency,
     mmoNumber: string,
   ): Promise<PayoutClaimView> {
-    // Une seule réclamation active par (user, devise) : on ne re-déduit jamais.
-    const active = await this.prisma.payoutClaim.findFirst({
+    // Chemin rapide : réclamation active existante → pas de nouvelle déduction.
+    const existing = await this.prisma.payoutClaim.findFirst({
       where: { userId, currency, status: 'SENT' },
     });
-    if (active) return this.toView(active);
+    if (existing) return this.toView(existing);
 
     // Solde net réel dans CETTE devise (source de vérité = ledger ORGANIZER).
     const { balances } = await this.earnings.getSummary(userId);
@@ -71,7 +71,14 @@ export class PayoutsService {
     if (!user) throw new NotFoundException('Utilisateur introuvable.');
 
     const jti = randomUUID();
-    const claim = await this.prisma.$transaction(async (tx) => {
+    const { claim, created } = await this.prisma.$transaction(async (tx) => {
+      // Sérialise les demandes concurrentes de ce (user, devise) : empêche la
+      // double déduction sur double-clic. Verrou relâché en fin de transaction.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`payout:${userId}:${currency}`}))`;
+      const active = await tx.payoutClaim.findFirst({
+        where: { userId, currency, status: 'SENT' },
+      });
+      if (active) return { claim: active, created: false };
       const c = await tx.payoutClaim.create({
         data: {
           userId,
@@ -91,24 +98,35 @@ export class PayoutsService {
           currency,
         },
       });
-      return c;
+      return { claim: c, created: true };
     });
 
-    const { confirmUrl, rejectUrl } = this.buildDecisionUrls(
-      claim.id,
-      claim.jti,
-    );
-    await this.mail.sendPayoutClaimEmail({
-      user,
-      currency,
-      amount: claim.amount,
-      mmoNumber,
-      confirmUrl,
-      rejectUrl,
-    });
+    if (created) {
+      const { confirmUrl, rejectUrl } = this.buildDecisionUrls(
+        claim.id,
+        claim.jti,
+      );
+      try {
+        await this.mail.sendPayoutClaimEmail({
+          user,
+          currency,
+          amount: claim.amount,
+          mmoNumber,
+          confirmUrl,
+          rejectUrl,
+        });
+      } catch (e) {
+        // Le solde est déjà déduit : on ne renvoie pas 500. L'organisateur
+        // pourra relancer l'envoi via « Renvoyer ».
+        this.logger.error(
+          `Envoi du mail de réclamation échoué (claim ${claim.id})`,
+          e as Error,
+        );
+      }
+    }
 
     this.logger.log(
-      `Réclamation créée (user ${userId}, ${claim.amount} ${currency}, MMO ${mmoNumber})`,
+      `Réclamation ${created ? 'créée' : 'déjà active'} (user ${userId}, ${claim.amount} ${currency})`,
     );
     return this.toView(claim);
   }
