@@ -1,81 +1,102 @@
 import { BadRequestException } from '@nestjs/common';
 import { PayoutsService } from './payouts.service';
-import { PrismaService } from 'src/prisma/prisma.service';
-import { MailService } from 'src/mail/mail.service';
-import { EarningsService } from './earnings.service';
 
-describe('PayoutsService', () => {
-  let service: PayoutsService;
-  let prisma: { user: { findUnique: jest.Mock } };
-  let earnings: { getSummary: jest.Mock };
-  let mail: { sendPayoutClaimEmail: jest.Mock };
+const earnings = { getSummary: jest.fn() };
+const mail = { sendPayoutClaimEmail: jest.fn() };
+const jwt = { sign: jest.fn(() => 'TK') };
+const config = { get: jest.fn(() => 'https://api.test') };
 
-  const user = {
-    id: 'u1',
-    firstname: 'Ada',
-    lastname: 'Lovelace',
-    email: 'ada@example.com',
-    phone: null,
-  };
+function makePrisma() {
+  return {
+    payoutClaim: {
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+    },
+    ledgerEntry: { create: jest.fn() },
+    user: { findUnique: jest.fn() },
+    $transaction: jest.fn(async (cb: any) => cb(txOf(prismaRef.current))),
+  } as any;
+}
+const prismaRef: { current: any } = { current: null };
+function txOf(p: any) { return p; }
 
-  beforeEach(() => {
-    prisma = { user: { findUnique: jest.fn().mockResolvedValue(user) } };
-    earnings = {
-      getSummary: jest.fn().mockResolvedValue({
-        balances: [
-          { currency: 'USD', balance: 85, gross: 100, commission: 15, net: 85 },
-          { currency: 'CDF', balance: 600, gross: 700, commission: 100, net: 600 },
-        ],
-      }),
-    };
-    mail = { sendPayoutClaimEmail: jest.fn().mockResolvedValue(undefined) };
-    service = new PayoutsService(
-      prisma as unknown as PrismaService,
-      earnings as unknown as EarningsService,
-      mail as unknown as MailService,
-    );
+function build() {
+  const prisma = makePrisma();
+  prismaRef.current = prisma;
+  const svc = new PayoutsService(prisma, earnings as any, mail as any, jwt as any, config as any);
+  return { svc, prisma };
+}
+
+beforeEach(() => jest.clearAllMocks());
+
+describe('PayoutsService.claimNet', () => {
+  it('déduit le solde et crée une réclamation SENT', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue(null);
+    earnings.getSummary.mockResolvedValue({ balances: [{ currency: 'USD', balance: 50 }] });
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', firstname: 'A', lastname: 'B', email: 'a@b.co', phone: null });
+    prisma.payoutClaim.create.mockResolvedValue({ id: 'c1', status: 'SENT', amount: 50, currency: 'USD', mmoNumber: '243810000000', jti: 'J', createdAt: new Date() });
+
+    const res = await svc.claimNet('u1', 'USD', '243810000000');
+
+    expect(prisma.ledgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ account: 'ORGANIZER', type: 'PAYOUT_ORGANIZER', amount: -50, currency: 'USD', userId: 'u1' }),
+    }));
+    expect(mail.sendPayoutClaimEmail).toHaveBeenCalledWith(expect.objectContaining({
+      confirmUrl: expect.stringContaining('decision=confirm'),
+      rejectUrl: expect.stringContaining('decision=reject'),
+    }));
+    expect(res).toMatchObject({ id: 'c1', status: 'SENT', amount: 50, currency: 'USD' });
   });
 
-  describe('claimNet', () => {
-    it('recalcule le montant depuis le solde ledger et notifie l’équipe Vybe', async () => {
-      const res = await service.claimNet('u1', 'CDF', '243812345678');
+  it('renvoie la réclamation active existante sans re-déduire', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue({ id: 'c0', status: 'SENT', amount: 30, currency: 'USD', mmoNumber: 'x', createdAt: new Date() });
+    const res = await svc.claimNet('u1', 'USD', '243810000000');
+    expect(res.id).toBe('c0');
+    expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+    expect(prisma.payoutClaim.create).not.toHaveBeenCalled();
+  });
 
-      expect(res).toEqual({ ok: true, amount: 600, currency: 'CDF' });
-      // Le montant envoyé au mail est celui du ledger (jamais fourni par le client).
-      expect(mail.sendPayoutClaimEmail).toHaveBeenCalledWith({
-        user,
-        currency: 'CDF',
-        amount: 600,
-        mmoNumber: '243812345678',
-      });
-    });
+  it('refuse si aucun solde', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue(null);
+    earnings.getSummary.mockResolvedValue({ balances: [{ currency: 'USD', balance: 0 }] });
+    await expect(svc.claimNet('u1', 'USD', '243810000000')).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
 
-    it('rejette si aucun solde dans la devise demandée', async () => {
-      earnings.getSummary.mockResolvedValue({ balances: [] });
-      await expect(
-        service.claimNet('u1', 'USD', '243812345678'),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(mail.sendPayoutClaimEmail).not.toHaveBeenCalled();
-    });
+describe('PayoutsService.resendClaim', () => {
+  it('refuse le renvoi avant 60 s (cooldown)', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findUnique.mockResolvedValue({ id: 'c1', userId: 'u1', status: 'SENT', amount: 50, currency: 'USD', mmoNumber: 'x', jti: 'J', lastSentAt: new Date() });
+    await expect(svc.resendClaim('u1', 'c1')).rejects.toBeInstanceOf(BadRequestException);
+  });
 
-    it('rejette un solde nul ou négatif', async () => {
-      earnings.getSummary.mockResolvedValue({
-        balances: [
-          { currency: 'USD', balance: 0, gross: 0, commission: 0, net: 0 },
-        ],
-      });
-      await expect(
-        service.claimNet('u1', 'USD', '243812345678'),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(mail.sendPayoutClaimEmail).not.toHaveBeenCalled();
-    });
+  it('renvoie le mail après le cooldown et met à jour lastSentAt', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findUnique.mockResolvedValue({ id: 'c1', userId: 'u1', status: 'SENT', amount: 50, currency: 'USD', mmoNumber: 'x', jti: 'J', lastSentAt: new Date(Date.now() - 120_000) });
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', firstname: 'A', lastname: 'B', email: 'a@b.co', phone: null });
+    const res = await svc.resendClaim('u1', 'c1');
+    expect(mail.sendPayoutClaimEmail).toHaveBeenCalled();
+    expect(prisma.payoutClaim.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'c1' }, data: { lastSentAt: expect.any(Date) } }));
+    expect(res).toEqual({ ok: true });
+  });
+});
 
-    it('rejette si l’utilisateur est introuvable', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
-      await expect(
-        service.claimNet('u1', 'USD', '243812345678'),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(mail.sendPayoutClaimEmail).not.toHaveBeenCalled();
-    });
+describe('PayoutsService.getCurrentClaim', () => {
+  it('renvoie la plus récente réclamation de la devise', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue({ id: 'c1', status: 'CONFIRMED', amount: 10, currency: 'USD', mmoNumber: 'x', createdAt: new Date() });
+    const res = await svc.getCurrentClaim('u1', 'USD');
+    expect(res).toMatchObject({ id: 'c1', status: 'CONFIRMED' });
+  });
+
+  it('renvoie null quand aucune réclamation', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue(null);
+    expect(await svc.getCurrentClaim('u1', 'USD')).toBeNull();
   });
 });
