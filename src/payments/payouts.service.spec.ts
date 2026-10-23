@@ -143,11 +143,24 @@ describe('PayoutsService.resendClaim', () => {
 });
 
 describe('PayoutsService.getCurrentClaim', () => {
-  it('renvoie la plus récente réclamation de la devise', async () => {
+  const base = { amount: 10, currency: 'USD', mmoNumber: 'x', createdAt: new Date() };
+
+  it('renvoie une réclamation SENT quel que soit son âge', async () => {
     const { svc, prisma } = build();
-    prisma.payoutClaim.findFirst.mockResolvedValue({ id: 'c1', status: 'CONFIRMED', amount: 10, currency: 'USD', mmoNumber: 'x', createdAt: new Date() });
-    const res = await svc.getCurrentClaim('u1', 'USD');
-    expect(res).toMatchObject({ id: 'c1', status: 'CONFIRMED' });
+    prisma.payoutClaim.findFirst.mockResolvedValue({ ...base, id: 'c1', status: 'SENT', decidedAt: null, createdAt: new Date(Date.now() - 3600_000) });
+    expect(await svc.getCurrentClaim('u1', 'USD')).toMatchObject({ id: 'c1', status: 'SENT' });
+  });
+
+  it('renvoie une réclamation CONFIRMED décidée récemment', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue({ ...base, id: 'c1', status: 'CONFIRMED', decidedAt: new Date() });
+    expect(await svc.getCurrentClaim('u1', 'USD')).toMatchObject({ id: 'c1', status: 'CONFIRMED' });
+  });
+
+  it('renvoie null pour une réclamation terminée depuis plus de 15 min', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue({ ...base, id: 'c1', status: 'CONFIRMED', decidedAt: new Date(Date.now() - 16 * 60_000) });
+    expect(await svc.getCurrentClaim('u1', 'USD')).toBeNull();
   });
 
   it('renvoie null quand aucune réclamation', async () => {

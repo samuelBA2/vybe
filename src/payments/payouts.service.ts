@@ -13,6 +13,7 @@ import { MailService } from 'src/mail/mail.service';
 import { EarningsService } from './earnings.service';
 
 const RESEND_COOLDOWN_MS = 60_000;
+const RESUME_WINDOW_MS = 15 * 60_000; // la barre d'une réclamation terminée reste visible 15 min
 
 export interface PayoutClaimView {
   id: string;
@@ -183,7 +184,17 @@ export class PayoutsService {
       where: { userId, currency },
       orderBy: { createdAt: 'desc' },
     });
-    return claim ? this.toView(claim) : null;
+    if (!claim) return null;
+    // Une réclamation terminée depuis longtemps ne doit plus bloquer le formulaire :
+    // on la masque passé la fenêtre de reprise (le statut en base reste correct).
+    if (
+      claim.status !== 'SENT' &&
+      (!claim.decidedAt ||
+        Date.now() - claim.decidedAt.getTime() > RESUME_WINDOW_MS)
+    ) {
+      return null;
+    }
+    return this.toView(claim);
   }
 
   private buildDecisionUrls(claimId: string, jti: string) {
