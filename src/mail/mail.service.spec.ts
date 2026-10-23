@@ -76,4 +76,26 @@ describe('MailService — événements', () => {
     const msg = send.mock.calls[0][0];
     expect(msg.subject.toLowerCase()).toContain('refus');
   });
+
+  it('sendPayoutClaimEmail rend les boutons Confirmer et Rejeter', async () => {
+    await service.sendPayoutClaimEmail({
+      user: {
+        id: 'u1',
+        firstname: 'A',
+        lastname: 'B',
+        email: 'a@b.co',
+        phone: null,
+      },
+      currency: 'USD',
+      amount: 42,
+      mmoNumber: '243810000000',
+      confirmUrl: 'https://api.test/payouts/decision?token=TK&decision=confirm',
+      rejectUrl: 'https://api.test/payouts/decision?token=TK&decision=reject',
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    const msg = send.mock.calls[0][0];
+    expect(msg.html).toContain('decision=confirm');
+    expect(msg.html).toContain('decision=reject');
+    expect(msg.text).toContain('decision=reject');
+  });
 });

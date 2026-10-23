@@ -566,6 +566,8 @@ export class MailService {
     currency: 'USD' | 'CDF';
     amount: number;
     mmoNumber: string;
+    confirmUrl: string;
+    rejectUrl: string;
   }): Promise<void> {
     const escapeHtml = (s: string) =>
       s
@@ -595,6 +597,8 @@ export class MailService {
     const safePhone = escapeHtml(params.user.phone ?? '—');
     const safeMmo = escapeHtml(params.mmoNumber);
     const safeAmount = escapeHtml(amountLabel);
+    const safeConfirmUrl = escapeHtml(params.confirmUrl);
+    const safeRejectUrl = escapeHtml(params.rejectUrl);
 
     // Destinataire = boîte de l'équipe Vybe (même fallback que la modération/contact).
     const to =
@@ -617,7 +621,9 @@ export class MailService {
         `Email : ${params.user.email ?? '—'}\n` +
         `Téléphone : ${params.user.phone ?? '—'}\n\n` +
         `Montant à envoyer : ${amountLabel}\n` +
-        `Numéro Mobile Money de réception : ${params.mmoNumber}\n\n` +
+        `Numéro Mobile Money de réception : ${params.mmoNumber}\n` +
+        `\nConfirmer (argent envoyé) : ${params.confirmUrl}\n` +
+        `Rejeter (restaurer le solde) : ${params.rejectUrl}\n\n` +
         `Vérifier l'identité et le solde avant d'effectuer l'envoi.`,
       html: `
 <!DOCTYPE html>
@@ -646,6 +652,15 @@ export class MailService {
           <p style="color:#888;margin:24px 0 0;font-size:13px;line-height:1.6;">
             Vérifier l'identité de l'organisateur et la cohérence du solde avant tout envoi.
           </p>
+          <table cellpadding="0" cellspacing="0" style="margin:24px auto 0;"><tr>
+            <td style="padding:0 8px;">
+              <a href="${safeConfirmUrl}" style="display:inline-block;padding:14px 26px;border-radius:10px;font-weight:700;background:#1db954;color:#fff;text-decoration:none;">Confirmer l'envoi</a>
+            </td>
+            <td style="padding:0 8px;">
+              <a href="${safeRejectUrl}" style="display:inline-block;padding:14px 26px;border-radius:10px;font-weight:700;background:#e0245e;color:#fff;text-decoration:none;">Rejeter</a>
+            </td>
+          </tr></table>
+          <p style="color:#9aa0a6;font-size:12px;margin:16px 0 0;">Confirmer = l'argent a été envoyé (le solde du client est déjà déduit). Rejeter = restaure le solde du client (ex. mauvais numéro).</p>
         </td></tr>
       </table>
     </td></tr>
