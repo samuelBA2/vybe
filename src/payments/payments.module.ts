@@ -15,6 +15,8 @@ import { EarningsController } from './earnings.controller';
 import { EarningsService } from './earnings.service';
 import { PayoutsController } from './payouts.controller';
 import { PayoutsService } from './payouts.service';
+import { PayoutModerationController } from './payout-moderation.controller';
+import { PayoutModerationService } from './payout-moderation.service';
 
 // Module paiement. Le fournisseur concret est lié au token PAYMENT_PROVIDER :
 // tout le flux (createOrder, webhook, reaper, comptabilité) dépend de
@@ -25,7 +27,12 @@ import { PayoutsService } from './payouts.service';
 // PrismaModule fournit PrismaService (audit PaymentProviderLog).
 @Module({
   imports: [PrismaModule, AuthModule, MailModule],
-  controllers: [PaymentsController, EarningsController, PayoutsController],
+  controllers: [
+    PaymentsController,
+    EarningsController,
+    PayoutsController,
+    PayoutModerationController,
+  ],
   providers: [
     {
       provide: PAYMENT_PROVIDER,
@@ -53,6 +60,7 @@ import { PayoutsService } from './payouts.service';
     PaymentsCleanupService,
     EarningsService,
     PayoutsService,
+    PayoutModerationService,
   ],
   exports: [PAYMENT_PROVIDER, PaymentsService],
 })
