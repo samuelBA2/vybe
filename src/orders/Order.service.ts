@@ -5,6 +5,7 @@ import { CreateOrderDto } from "./dto/CreateOrder.dto";
 import { PAYMENT_PROVIDER } from "src/payments/payment-provider.interface";
 import type { PaymentProvider } from "src/payments/payment-provider.interface";
 import { PaymentsService } from "src/payments/payments.service";
+import { assertPhoneMatchesOperator } from "src/payments/operator-guards";
 import { splitAmount } from "src/common/money";
 
 
@@ -98,9 +99,11 @@ export class OrderService {
         if (!op || !op.available || !op.currencies.includes(currency)) {
             throw new BadRequestException('Opérateur indisponible pour cette devise.');
         }
+         // Le préfixe du numéro doit correspondre à l'opérateur MMO choisi.
+        assertPhoneMatchesOperator(op, dto.phoneNumber);
 
         // Identité acheteur : Araka l'exige (customerFullName). PawaPay l'ignore.
-       
+    
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
         // Araka limite transactionReference à 20 caractères (String(20), doc v2.7 §2.2.2).

@@ -75,6 +75,7 @@ export interface ProviderOperator {
   // Une devise CLOSED chez cet opérateur est exclue (ex. opérateur USD=OK,
   // CDF=CLOSED → currencies=['USD']), jamais proposée telle quelle par PawaPay.
   currencies: ProviderCurrency[];
+  phonePrefixes?: string[]; // préfixes valides pour ce fournisseur    
 }
 
 export interface PaymentProvider {

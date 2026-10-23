@@ -61,10 +61,10 @@ const OPERATOR_TO_ARAKA: Record<string, string> = {
 };
 
 const OPERATORS: ProviderOperator[] = [
-  { code: 'MPESA', name: 'Vodacom M-Pesa', available: true, currencies: ['USD', 'CDF'] },
-  { code: 'AIRTEL', name: 'Airtel Money', available: true, currencies: ['USD', 'CDF'] },
-  { code: 'ORANGE', name: 'Orange Money', available: true, currencies: ['USD', 'CDF'] },
-  { code: 'AFRIMONEY', name: 'Afrimoney', available: true, currencies: ['USD', 'CDF'] },
+  { code: 'MPESA', name: 'Vodacom M-Pesa', available: true, currencies: ['USD', 'CDF'], phonePrefixes: ['81', '82', '83'] },
+  { code: 'AIRTEL', name: 'Airtel Money', available: true, currencies: ['USD', 'CDF'], phonePrefixes: ['96', '97', '98', '99'] },
+  { code: 'ORANGE', name: 'Orange Money', available: true, currencies: ['USD', 'CDF'], phonePrefixes: ['80', '84', '85', '89'] },
+  { code: 'AFRIMONEY', name: 'Afrimoney', available: true, currencies: ['USD', 'CDF'], phonePrefixes: ['90', '91'] },
 ];
 
 const SUCCESS_TEXT = new Set([
