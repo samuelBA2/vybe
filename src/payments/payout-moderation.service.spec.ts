@@ -9,7 +9,7 @@ import { PayoutModerationService } from './payout-moderation.service';
 const jwt = { verify: jest.fn() };
 function makePrisma() {
   const prisma: any = {
-    payoutClaim: { findUnique: jest.fn(), update: jest.fn() },
+    payoutClaim: { findUnique: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     ledgerEntry: { create: jest.fn() },
   };
   prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
@@ -26,7 +26,10 @@ it('confirm → CONFIRMED sans écriture ledger', async () => {
   jwt.verify.mockReturnValue({ sub: 'c1', type: 'payout-claim', jti: 'J' });
   prisma.payoutClaim.findUnique.mockResolvedValue({ id: 'c1', status: 'SENT', amount: 50, currency: 'USD', userId: 'u1' });
   await svc.decide('TK', 'confirm');
-  expect(prisma.payoutClaim.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'CONFIRMED' }) }));
+  expect(prisma.payoutClaim.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ id: 'c1', status: 'SENT' }),
+    data: expect.objectContaining({ status: 'CONFIRMED' }),
+  }));
   expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
 });
 
@@ -35,6 +38,10 @@ it('reject → CANCELLED + écriture ledger +montant (restaure)', async () => {
   jwt.verify.mockReturnValue({ sub: 'c1', type: 'payout-claim', jti: 'J' });
   prisma.payoutClaim.findUnique.mockResolvedValue({ id: 'c1', status: 'SENT', amount: 50, currency: 'USD', userId: 'u1' });
   await svc.decide('TK', 'reject');
+  expect(prisma.payoutClaim.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ id: 'c1', status: 'SENT' }),
+    data: expect.objectContaining({ status: 'CANCELLED' }),
+  }));
   expect(prisma.ledgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({ account: 'ORGANIZER', type: 'PAYOUT_ORGANIZER', amount: 50, currency: 'USD', userId: 'u1' }),
   }));
@@ -64,4 +71,13 @@ it('claim introuvable → NotFound', async () => {
   jwt.verify.mockReturnValue({ sub: 'c1', type: 'payout-claim', jti: 'J' });
   prisma.payoutClaim.findUnique.mockResolvedValue(null);
   await expect(svc.decide('TK', 'confirm')).rejects.toBeInstanceOf(NotFoundException);
+});
+
+it('reject concurrent perdant (updateMany count 0) → Conflict, aucun crédit ledger', async () => {
+  const { svc, prisma } = build();
+  jwt.verify.mockReturnValue({ sub: 'c1', type: 'payout-claim', jti: 'J' });
+  prisma.payoutClaim.findUnique.mockResolvedValue({ id: 'c1', status: 'SENT', amount: 50, currency: 'USD', userId: 'u1' });
+  prisma.payoutClaim.updateMany.mockResolvedValue({ count: 0 });
+  await expect(svc.decide('TK', 'reject')).rejects.toBeInstanceOf(ConflictException);
+  expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
 });

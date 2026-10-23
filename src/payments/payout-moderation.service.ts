@@ -48,13 +48,18 @@ export class PayoutModerationService {
 
     const confirmed = decision === 'confirm';
     await this.prisma.$transaction(async (tx) => {
-      await tx.payoutClaim.update({
-        where: { id: claim.id },
+      // Compare-and-swap atomique : seule une décision concurrente gagnante passe.
+      const res = await tx.payoutClaim.updateMany({
+        where: { id: claim.id, status: 'SENT' },
         data: {
           status: confirmed ? 'CONFIRMED' : 'CANCELLED',
           decidedAt: new Date(),
         },
       });
+      if (res.count === 0) {
+        // Une décision concurrente a déjà traité cette réclamation.
+        throw new ConflictException('Cette demande a déjà été traitée.');
+      }
       if (!confirmed) {
         // Restaure le solde : écriture inverse (crédit) du montant déduit.
         await tx.ledgerEntry.create({
