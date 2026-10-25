@@ -111,6 +111,7 @@ export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
   if (mime === 'application/pdf') return 'DOCUMENT';
   return 'OTHER';
 }
+
 // Montant minimum d'un retrait « Réclamer le net », PAR DEVISE. Sert à la fois de
 // plancher par demande ET de condition d'accès (il faut au moins ça sur le compte).
 export const MIN_CLAIM_AMOUNT: Record<$Enums.Currency, number> = {

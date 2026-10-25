@@ -121,6 +121,8 @@ export class PayoutsService {
           rejectUrl,
         });
       } catch (e) {
+        // Le solde est déjà déduit : on ne renvoie pas 500. L'organisateur
+        // pourra relancer l'envoi via « Renvoyer ».
         this.logger.error(
           `Envoi du mail de réclamation échoué (claim ${claim.id})`,
           e as Error,

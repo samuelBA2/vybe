@@ -9,8 +9,10 @@ import { $Enums } from '@prisma/client';
 
 // Demande de retrait MANUEL (« Réclamer le net »). Le client ne retire pas
 // lui-même : il signale à l'équipe Vybe sur quel numéro Mobile Money recevoir
-// son solde net, et Vybe effectue l'envoi. Le MONTANT n'est jamais fourni par
-// le client — il est recalculé côté serveur depuis le ledger (source de vérité).
+// son solde net, et Vybe effectue l'envoi. Le client fournit un MONTANT
+// INDICATIF que le serveur revalide (précision, minimum par devise, ≤ solde
+// réel) dans la transaction verrouillée, depuis le ledger (source de vérité) :
+// le client ne peut jamais réclamer plus que son solde.
 export class ClaimPayoutDto {
   // Devise du solde réclamé (un organisateur peut détenir USD ET CDF, jamais sommés).
   @IsEnum($Enums.Currency, { message: 'Devise invalide.' })

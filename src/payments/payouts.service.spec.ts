@@ -108,6 +108,34 @@ describe('PayoutsService.claimNet', () => {
     await expect(svc.claimNet('u1', 'USD', 'x', 1)).resolves.toMatchObject({ amount: 1 });
   });
 
+  it('accepte le minimum exact CDF (2500)', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue(null);
+    setBalance(prisma, 2500);
+    prisma.user.findUnique.mockResolvedValue(USER);
+    prisma.payoutClaim.create.mockResolvedValue({ id: 'c1', status: 'SENT', amount: 2500, currency: 'CDF', mmoNumber: 'x', jti: 'J', createdAt: new Date() });
+    await expect(svc.claimNet('u1', 'CDF', 'x', 2500)).resolves.toMatchObject({ amount: 2500 });
+    expect(prisma.payoutClaim.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ amount: 2500 }) }));
+    expect(prisma.ledgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ amount: -2500 }) }));
+  });
+
+  it('refuse un montant CDF sous le minimum (2499) avant toute transaction', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue(null);
+    await expect(svc.claimNet('u1', 'CDF', 'x', 2499)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuse si le solde recalculé est nul : aucune écriture', async () => {
+    const { svc, prisma } = build();
+    prisma.payoutClaim.findFirst.mockResolvedValue(null);
+    setBalance(prisma, 0);
+    prisma.user.findUnique.mockResolvedValue(USER);
+    await expect(svc.claimNet('u1', 'USD', 'x', 1)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.payoutClaim.create).not.toHaveBeenCalled();
+    expect(prisma.ledgerEntry.create).not.toHaveBeenCalled();
+  });
+
   it('renvoie la réclamation active existante sans re-déduire', async () => {
     const { svc, prisma } = build();
     prisma.payoutClaim.findFirst.mockResolvedValue({ id: 'c0', status: 'SENT', amount: 30, currency: 'USD', mmoNumber: 'x', createdAt: new Date() });
