@@ -10,7 +10,12 @@ import { randomUUID } from 'crypto';
 import { $Enums } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { MailService } from 'src/mail/mail.service';
-import { EarningsService } from './earnings.service';
+import { MIN_CLAIM_AMOUNT } from 'src/common/constants';
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+// Quantifie un montant dans sa devise : CDF entier, USD 2 décimales (miroir EarningsService).
+const quantize = (n: number, currency: $Enums.Currency) =>
+  currency === 'CDF' ? Math.round(n) : round2(n);
 
 const RESEND_COOLDOWN_MS = 60_000;
 const RESUME_WINDOW_MS = 15 * 60_000; // la barre d'une réclamation terminée reste visible 15 min
@@ -33,7 +38,6 @@ export class PayoutsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly earnings: EarningsService,
     private readonly mail: MailService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
@@ -43,21 +47,16 @@ export class PayoutsService {
     userId: string,
     currency: $Enums.Currency,
     mmoNumber: string,
+    amount: number,
   ): Promise<PayoutClaimView> {
+    // Validation de FORME du montant (indépendante du solde) : rejet rapide, sans verrou.
+    this.assertAmountShape(amount, currency);
+
     // Chemin rapide : réclamation active existante → pas de nouvelle déduction.
     const existing = await this.prisma.payoutClaim.findFirst({
       where: { userId, currency, status: 'SENT' },
     });
     if (existing) return this.toView(existing);
-
-    // Solde net réel dans CETTE devise (source de vérité = ledger ORGANIZER).
-    const { balances } = await this.earnings.getSummary(userId);
-    const bal = balances.find((b) => b.currency === currency);
-    if (!bal || bal.balance <= 0) {
-      throw new BadRequestException(
-        'Aucun solde à réclamer dans cette devise.',
-      );
-    }
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -80,22 +79,27 @@ export class PayoutsService {
         where: { userId, currency, status: 'SENT' },
       });
       if (active) return { claim: active, created: false };
+
+      // ANTI-SURFACTURATION : solde réel recalculé DANS la transaction (source de
+      // vérité = ledger ORGANIZER). Le montant demandé ne peut jamais le dépasser.
+      const agg = await tx.ledgerEntry.aggregate({
+        _sum: { amount: true },
+        where: { userId, account: 'ORGANIZER', currency },
+      });
+      const balance = quantize(agg._sum.amount ?? 0, currency);
+      if (amount > balance) {
+        throw new BadRequestException('Montant supérieur au solde disponible.');
+      }
+
       const c = await tx.payoutClaim.create({
-        data: {
-          userId,
-          currency,
-          amount: bal.balance,
-          mmoNumber,
-          jti,
-          status: 'SENT',
-        },
+        data: { userId, currency, amount, mmoNumber, jti, status: 'SENT' },
       });
       await tx.ledgerEntry.create({
         data: {
           account: 'ORGANIZER',
           userId,
           type: 'PAYOUT_ORGANIZER',
-          amount: -bal.balance, // débit : déduction à la demande
+          amount: -amount, // débit : déduction du montant demandé
           currency,
         },
       });
@@ -117,8 +121,6 @@ export class PayoutsService {
           rejectUrl,
         });
       } catch (e) {
-        // Le solde est déjà déduit : on ne renvoie pas 500. L'organisateur
-        // pourra relancer l'envoi via « Renvoyer ».
         this.logger.error(
           `Envoi du mail de réclamation échoué (claim ${claim.id})`,
           e as Error,
@@ -130,6 +132,25 @@ export class PayoutsService {
       `Réclamation ${created ? 'créée' : 'déjà active'} (user ${userId}, ${claim.amount} ${currency})`,
     );
     return this.toView(claim);
+  }
+
+  // Validation de forme d'un montant de retrait, indépendante du solde.
+  private assertAmountShape(amount: number, currency: $Enums.Currency): void {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Montant invalide.');
+    }
+    if (quantize(amount, currency) !== amount) {
+      throw new BadRequestException(
+        currency === 'CDF'
+          ? 'Le montant en CDF doit être un entier.'
+          : 'Le montant en USD ne peut avoir plus de 2 décimales.',
+      );
+    }
+    if (amount < MIN_CLAIM_AMOUNT[currency]) {
+      throw new BadRequestException(
+        `Montant minimum : ${MIN_CLAIM_AMOUNT[currency]} ${currency}.`,
+      );
+    }
   }
 
   async resendClaim(userId: string, claimId: string): Promise<{ ok: true }> {

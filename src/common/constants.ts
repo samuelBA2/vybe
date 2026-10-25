@@ -1,3 +1,5 @@
+import { $Enums } from '@prisma/client';
+
 // Coût (nombre de rounds) bcrypt pour le hachage des mots de passe.
 // Constante partagée : garantit un coût identique à l'inscription et au
 // changement de mot de passe (évite toute divergence 10 vs 12).
@@ -109,3 +111,9 @@ export function mimeToMediaType(mime: string): 'IMAGE' | 'DOCUMENT' | 'OTHER' {
   if (mime === 'application/pdf') return 'DOCUMENT';
   return 'OTHER';
 }
+// Montant minimum d'un retrait « Réclamer le net », PAR DEVISE. Sert à la fois de
+// plancher par demande ET de condition d'accès (il faut au moins ça sur le compte).
+export const MIN_CLAIM_AMOUNT: Record<$Enums.Currency, number> = {
+  USD: 1,
+  CDF: 2500,
+};

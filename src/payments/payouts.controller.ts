@@ -33,7 +33,12 @@ export class PayoutsController {
   @Post('claim')
   @HttpCode(200)
   async claim(@Req() req: AuthedRequest, @Body() dto: ClaimPayoutDto) {
-    return this.payouts.claimNet(req.user.sub, dto.currency, dto.mmoNumber);
+    return this.payouts.claimNet(
+      req.user.sub,
+      dto.currency,
+      dto.mmoNumber,
+      dto.amount,
+    );
   }
 
   // « Renvoyer » : ré-expédie le mail de la réclamation SENT (cooldown 60 s).
