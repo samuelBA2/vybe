@@ -279,6 +279,24 @@ model Order {
   @@index([paymentRef])
 }
 
+// Idempotence de POST /order (I1) : une clé client (en-tête Idempotency-Key) =
+// un seul checkout. Rejouer la même clé renvoie le même paymentRef, sans nouvelle
+// réservation de stock ni nouveau push. ARAKA ne déduplique pas les références :
+// cette garantie est entièrement côté Vybe. Purgé après 24 h par le reaper.
+model CheckoutRequest {
+  id          String   @id @default(uuid())
+  userId      String
+  key         String
+  // sha256 du panier trié + opérateur + numéro : une clé réutilisée pour un autre
+  // panier est refusée (422).
+  fingerprint String
+  paymentRef  String
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, key])
+  @@index([createdAt]) // purge
+}
+
 enum PaymentStatus {
   PENDING
   PAID
