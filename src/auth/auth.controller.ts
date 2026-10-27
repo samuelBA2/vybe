@@ -21,6 +21,7 @@ import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { LoginAgentDto } from 'src/agent/dto/LoginAgentDto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 
 // Nom du cookie httpOnly qui transporte le refresh token.
 // path restreint à /auth : le cookie n'est envoyé que sur les routes d'auth.
@@ -73,6 +74,19 @@ export class AuthController {
   @Post('login/agent')
   async loginAgent(@Body() dto: LoginAgentDto){
     return this.authService.loginAgent(dto)
+  }
+
+  // Connexion Google : le front envoie l'ID token, le back le vérifie.
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('google')
+  async google(
+    @Body() dto: GoogleLoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const tokens = await this.authService.googleLogin(dto.idToken);
+    setRefreshCookie(res, tokens.refreshToken);
+    // Le refresh token ne vit que dans le cookie httpOnly : jamais exposé au JS.
+    return { accessToken: tokens.accessToken };
   }
 
   // Mot de passe oublié : envoi de l'OTP vers le canal du compte.

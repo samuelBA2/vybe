@@ -9,6 +9,7 @@ import { SmsModule } from 'src/sms/sms.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { OtpModule } from 'src/otp/otp.module';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { GoogleAuthService } from './google-auth.service';
 
 @Module({
   imports: [
@@ -26,7 +27,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard],
+  providers: [AuthService, JwtStrategy, JwtAuthGuard, GoogleAuthService],
   exports: [JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}
