@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import { SmsService } from 'src/sms/sms.service';
 import { ConfigService } from '@nestjs/config';
 import { OtpService } from 'src/otp/otp.service';
+import { GoogleAuthService } from './google-auth.service';
 import { MAX_LOGIN_ATTEMPTS } from 'src/common/constants';
 import { $Enums } from '@prisma/client';
 
@@ -35,7 +36,7 @@ const makeUser = (over: Partial<any> = {}) => ({
 describe('AuthService', () => {
   let service: AuthService;
   let prisma: {
-    user: { findUnique: jest.Mock; update: jest.Mock };
+    user: { findUnique: jest.Mock; update: jest.Mock; create: jest.Mock };
     usedToken: { findUnique: jest.Mock; create: jest.Mock };
     agent: { findUnique: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
@@ -46,10 +47,11 @@ describe('AuthService', () => {
     sendLoginPhoneOtp: jest.Mock;
     verifyOtp: jest.Mock;
   };
+  let googleAuth: { verifyIdToken: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
-      user: { findUnique: jest.fn(), update: jest.fn() },
+      user: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
       usedToken: { findUnique: jest.fn(), create: jest.fn() },
       agent: { findUnique: jest.fn(), update: jest.fn() },
       $transaction: jest.fn(),
@@ -60,6 +62,7 @@ describe('AuthService', () => {
       sendLoginPhoneOtp: jest.fn(),
       verifyOtp: jest.fn(),
     };
+    googleAuth = { verifyIdToken: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -69,6 +72,7 @@ describe('AuthService', () => {
         { provide: SmsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => 'test-secret' } },
         { provide: OtpService, useValue: otp },
+        { provide: GoogleAuthService, useValue: googleAuth },
       ],
     }).compile();
 
@@ -407,6 +411,122 @@ describe('AuthService', () => {
       expect(prisma.agent.update).not.toHaveBeenCalled();
       expect(jwt.sign).toHaveBeenCalled();
       expect(res).toBeTruthy();
+    });
+  });
+
+  // ─── googleLogin (connexion Google) ───────────────────────────────────────────
+
+  describe('googleLogin', () => {
+    const profile = {
+      googleId: 'g-123',
+      email: 'jean@gmail.com',
+      emailVerified: true,
+      firstName: 'Jean',
+      lastName: 'Dupont',
+      picture: 'http://img/p.png',
+    };
+
+    it('rejette un email Google non vérifié', async () => {
+      googleAuth.verifyIdToken.mockResolvedValue({
+        ...profile,
+        emailVerified: false,
+      });
+      await expect(service.googleLogin('tok')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('chemin rapide : compte déjà lié par googleId', async () => {
+      googleAuth.verifyIdToken.mockResolvedValue(profile);
+      prisma.user.findUnique.mockResolvedValueOnce(
+        makeUser({ id: 'u-1', googleId: 'g-123' }),
+      );
+
+      const res = await service.googleLogin('tok');
+
+      expect(res).toEqual({
+        accessToken: 'signed-jwt',
+        refreshToken: 'signed-jwt',
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('rapprochement : email existant → lie le googleId', async () => {
+      googleAuth.verifyIdToken.mockResolvedValue(profile);
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null) // par googleId
+        .mockResolvedValueOnce(
+          makeUser({
+            id: 'u-2',
+            email: 'jean@gmail.com',
+            firstname: null,
+            lastname: null,
+            avatarUrl: null,
+          }),
+        ); // par email
+      prisma.user.update.mockResolvedValue(makeUser({ id: 'u-2' }));
+
+      const res = await service.googleLogin('tok');
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'u-2' },
+        data: {
+          googleId: 'g-123',
+          firstname: 'Jean',
+          lastname: 'Dupont',
+          avatarUrl: 'http://img/p.png',
+        },
+      });
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(res.accessToken).toBe('signed-jwt');
+    });
+
+    it('création : email inconnu → nouveau compte USER sans mot de passe', async () => {
+      googleAuth.verifyIdToken.mockResolvedValue(profile);
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null) // googleId
+        .mockResolvedValueOnce(null); // email
+      prisma.user.create.mockResolvedValue(
+        makeUser({ id: 'u-3', role: 'USER' }),
+      );
+
+      const res = await service.googleLogin('tok');
+
+      expect(prisma.user.create).toHaveBeenCalledWith({
+        data: {
+          email: 'jean@gmail.com',
+          emailVerified: true,
+          googleId: 'g-123',
+          firstname: 'Jean',
+          lastname: 'Dupont',
+          avatarUrl: 'http://img/p.png',
+          role: $Enums.Role.USER,
+        },
+      });
+      expect(res.accessToken).toBe('signed-jwt');
+    });
+
+    it('rejette un compte soft-deleté lié par googleId', async () => {
+      googleAuth.verifyIdToken.mockResolvedValue(profile);
+      prisma.user.findUnique.mockResolvedValueOnce(
+        makeUser({ id: 'u-4', googleId: 'g-123', isValid: false }),
+      );
+      await expect(service.googleLogin('tok')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('rejette un compte soft-deleté trouvé par email (pas de lien écrit)', async () => {
+      googleAuth.verifyIdToken.mockResolvedValue(profile);
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(makeUser({ id: 'u-5', isValid: false }));
+      await expect(service.googleLogin('tok')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -32,6 +32,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { LoginAgentDto } from 'src/agent/dto/LoginAgentDto';
 import { hashCode } from 'src/common/hash-code';
+import { GoogleAuthService } from './google-auth.service';
 
 // Hash factice comparé quand le compte n'existe pas / n'a pas de mot de passe :
 // aligne le temps de réponse sur celui d'un vrai bcrypt.compare et évite de
@@ -46,6 +47,7 @@ export class AuthService {
     private smsService: SmsService,
     private config: ConfigService,
     private readonly OtpService: OtpService,
+    private readonly googleAuth: GoogleAuthService,
   ) {}
 
   // Method to sign JWT tokens partagés (access + refresh)(l'utilisateur se connecte directement à l'inscription)
@@ -68,7 +70,63 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  // Methode signToken pour agent 
+  // ─── Connexion Google (flux front→jeton / back→vérif) ─────────────────────────
+  async googleLogin(idToken: string) {
+    const profile = await this.googleAuth.verifyIdToken(idToken);
+
+    // On ne lie/crée jamais sur un email Google non vérifié.
+    if (!profile.emailVerified) {
+      throw new UnauthorizedException('Adresse Google non vérifiée.');
+    }
+
+    // a. Compte déjà lié par googleId.
+    const byGoogleId = await this.prisma.user.findUnique({
+      where: { googleId: profile.googleId },
+    });
+    if (byGoogleId) {
+      if (!byGoogleId.isValid) {
+        throw new UnauthorizedException('Identifiants invalides');
+      }
+      return this.signToken({ sub: byGoogleId.id, role: byGoogleId.role });
+    }
+
+    // b. Rapprochement automatique par email (vérifié des deux côtés).
+    const byEmail = await this.prisma.user.findUnique({
+      where: { email: profile.email },
+    });
+    if (byEmail) {
+      if (!byEmail.isValid) {
+        throw new UnauthorizedException('Identifiants invalides');
+      }
+      // On ne remplit que les champs vides : jamais écraser une saisie utilisateur.
+      const linked = await this.prisma.user.update({
+        where: { id: byEmail.id },
+        data: {
+          googleId: profile.googleId,
+          firstname: byEmail.firstname ?? profile.firstName,
+          lastname: byEmail.lastname ?? profile.lastName,
+          avatarUrl: byEmail.avatarUrl ?? profile.picture,
+        },
+      });
+      return this.signToken({ sub: linked.id, role: linked.role });
+    }
+
+    // c. Création d'un compte Google-only (sans mot de passe).
+    const created = await this.prisma.user.create({
+      data: {
+        email: profile.email,
+        emailVerified: true,
+        googleId: profile.googleId,
+        firstname: profile.firstName,
+        lastname: profile.lastName,
+        avatarUrl: profile.picture,
+        role: $Enums.Role.USER,
+      },
+    });
+    return this.signToken({ sub: created.id, role: created.role });
+  }
+
+  // Methode signToken pour agent
   private signAgentToken(agent: {id: string; eventId: string; event: {endDate: Date }}){
     const secret = this.config.get<string>('JWT_SECRET');
     if(!secret) throw new Error('Une erreur est servenue !');
