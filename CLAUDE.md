@@ -58,6 +58,9 @@ Login (`/auth/login/email`, `/auth/login/phone`) compares bcrypt hashes against 
 
 `OtpService.sendEmailOtp`/`sendPhoneOtp` deliberately send a generic "someone tried to register with your identifier" message (without revealing account existence) when the identifier is already registered, instead of issuing a real OTP.
 
+### Connexion Google (flux front→jeton / back→vérif)
+`POST /auth/google` (public, throttle 10/min) : le front obtient un **ID token Google** côté client et l'envoie dans `{ idToken }`. `GoogleAuthService` (`src/auth/google-auth.service.ts`, wrapper de `google-auth-library` comme `SmsService`/`MailService` wrappent Twilio/SendGrid) vérifie signature/audience/expiration (`audience = GOOGLE_CLIENT_ID`) et normalise le payload en `GoogleProfile` (`googleId`, `email`, `emailVerified`, `firstName?`, `lastName?`, `picture?`) ; toute erreur → 401 générique « Connexion Google invalide. ». `AuthService.googleLogin` orchestre la logique métier : (a) email Google **non vérifié** → rejet ; (b) compte déjà lié par `User.googleId` → connexion ; (c) sinon rapprochement par **email** (remplit seulement les champs profil vides, jamais d'écrasement) + écriture du `googleId` ; (d) sinon création d'un compte `USER` **sans mot de passe** (`hashedPassword` null). Les comptes soft-deletés (`isValid=false`) sont rejetés (401 générique « Identifiants invalides »), comme au login classique. Le contrôleur renvoie `{ accessToken }` et pose le refresh dans le cookie httpOnly `vybe_refresh`, exactement comme `/auth/login`. Les tests unitaires **mockent** `GoogleAuthService`/le SDK et passent sans `GOOGLE_CLIENT_ID`.
+
 ### Authenticated routes and authorization
 `JwtAuthGuard` (in `src/auth/guards/`) manually verifies the bearer token via `JwtService` and attaches `{ sub, role }` to `request.user` — apply with `@UseGuards(JwtAuthGuard)`. `UsersController`'s `me`/`me/password`/`me/identifier` routes use `req.user.id` or `req.user.sub`.
 
@@ -86,7 +89,7 @@ Full event creation in a single `POST /events` (authenticated, `USER` only). The
 4. `GET /events/:id` (public) — returns the full event with media, ticket categories, and creator info.
 
 ### Config
-`ConfigModule` is global. Key env vars: `DATABASE_URL`, `JWT_SECRET`, `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`, `SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`/`SENDGRID_FROM_NAME`, `PORT`, `VYBE_TEAM_EMAIL` (moderation email recipient, fallback `SENDGRID_FROM_EMAIL`), `API_BASE_URL` (base URL for magic links + payment webhook/return, e.g. `http://localhost:3000`).
+`ConfigModule` is global. Key env vars: `DATABASE_URL`, `JWT_SECRET`, `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_PHONE_NUMBER`, `SENDGRID_API_KEY`/`SENDGRID_FROM_EMAIL`/`SENDGRID_FROM_NAME`, `PORT`, `VYBE_TEAM_EMAIL` (moderation email recipient, fallback `SENDGRID_FROM_EMAIL`), `API_BASE_URL` (base URL for magic links + payment webhook/return, e.g. `http://localhost:3000`), `GOOGLE_CLIENT_ID` (OAuth 2.0 Web Client ID servant d'`audience` pour vérifier les ID tokens Google sur `POST /auth/google` ; sans lui le service journalise un warning et toute connexion Google échoue — les tests ne l'exigent pas, ils mockent le SDK).
 
 Paiement (module `payments`, indépendant du fournisseur — voir `src/common/constants.ts`) : `USD_TO_CDF_RATE` (taux USD→CDF figé V1, défaut `2250`), `PAYMENT_PENDING_TTL_MINUTES` (délai reaper d'expiration des commandes `PENDING`, défaut `25`). Le fournisseur concret est choisi par `PAYMENT_PROVIDER` (`araka` par défaut, ou `pawapay`). Araka : `ARAKA_BASE_URL`, `ARAKA_EMAIL`, `ARAKA_PASSWORD`, `ARAKA_PAYMENT_PAGE_ID`, callback `API_BASE_URL/payments/webhook`. PawaPay : `PAWAPAY_API_TOKEN`, `PAWAPAY_BASE_URL`, `PAWAPAY_PUBLIC_KEY`.
 

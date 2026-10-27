@@ -39,6 +39,7 @@
     "cloudinary": "^2.10.0",
     "cookie-parser": "^1.4.7",
     "file-type": "^21.3.4",
+    "google-auth-library": "^10.9.1",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.3",
     "passport": "^0.7.0",
