@@ -28,13 +28,24 @@ import { GoogleLoginDto } from './dto/google-login.dto';
 const REFRESH_COOKIE = 'vybe_refresh'; 
 const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours (aligné sur le JWT)
 
-function setRefreshCookie(res: Response, refreshToken: string) {
+// Options communes à la pose ET à l'effacement : un navigateur n'efface un
+// cookie que si les attributs correspondent à ceux de la pose.
+// SameSite=Lax suffit : front (www.vybeplatform.app) et API (api.vybeplatform.app)
+// sont sur le même site, le cookie n'est donc plus un cookie tiers.
+// isProd est évalué à chaque appel (et non au chargement du module).
+function refreshCookieOptions() {
   const isProd = process.env.NODE_ENV === 'production';
-  res.cookie(REFRESH_COOKIE, refreshToken, {
+  return {
     httpOnly: true,
-    secure: isProd, // en prod (HTTPS) uniquement ; SameSite=None exige secure
-    sameSite: isProd ? 'none' : 'lax', // front et API sur des domaines différents en prod
+    secure: isProd, // HTTPS uniquement en prod
+    sameSite: 'lax' as const,
     path: '/auth',
+  };
+}
+
+function setRefreshCookie(res: Response, refreshToken: string) {
+  res.cookie(REFRESH_COOKIE, refreshToken, {
+    ...refreshCookieOptions(),
     maxAge: REFRESH_MAX_AGE_MS,
   });
 }
@@ -151,7 +162,7 @@ export class AuthController {
 
   @Post('logout')
   logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie(REFRESH_COOKIE, { path: '/auth' });
+    res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
     return { message: 'Déconnecté.' };
   }
 }

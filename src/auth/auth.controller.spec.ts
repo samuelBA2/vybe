@@ -37,4 +37,51 @@ describe('AuthController', () => {
     expect(cookie).toHaveBeenCalled(); // setRefreshCookie
     expect(out).toEqual({ accessToken: 'acc' });
   });
+
+  // En prod, front (www.vybeplatform.app) et API (api.vybeplatform.app) sont
+  // sur le même site : SameSite=Lax suffit, et la suppression doit reprendre
+  // les mêmes attributs que la pose, sinon le navigateur garde le cookie.
+  describe('cookie de refresh en production', () => {
+    const previousEnv = process.env.NODE_ENV;
+    beforeEach(() => {
+      process.env.NODE_ENV = 'production';
+    });
+    afterEach(() => {
+      process.env.NODE_ENV = previousEnv;
+    });
+
+    const expectedOptions = {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/auth',
+    };
+
+    it('pose le cookie en SameSite=Lax + Secure', async () => {
+      authService.googleLogin.mockResolvedValue({
+        accessToken: 'acc',
+        refreshToken: 'ref',
+      });
+      const cookie = jest.fn();
+      await controller.google({ idToken: 'tok' }, {
+        cookie,
+      } as unknown as Response);
+
+      expect(cookie).toHaveBeenCalledWith(
+        'vybe_refresh',
+        'ref',
+        expect.objectContaining(expectedOptions),
+      );
+    });
+
+    it('POST /auth/logout efface le cookie avec les mêmes attributs', () => {
+      const clearCookie = jest.fn();
+      controller.logout({ clearCookie } as unknown as Response);
+
+      expect(clearCookie).toHaveBeenCalledWith(
+        'vybe_refresh',
+        expect.objectContaining(expectedOptions),
+      );
+    });
+  });
 });
