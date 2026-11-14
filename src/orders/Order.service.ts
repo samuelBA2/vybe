@@ -103,7 +103,8 @@ export class OrderService {
        
 
         // Référence de transaction PARTAGÉE par les N commandes d'un même checkout.
-        const paymentRef = randomUUID();
+        // Araka limite transactionReference à 20 caractères (String(20), doc v2.7 §2.2.2).
+        const paymentRef = randomUUID().replace(/-/g, '').slice(0, 20);
         // Montant total réellement poussé au fournisseur = Σ chargedAmount (garde
         // l'invariant vérifié côté webhook : provider.amount == Σ chargedAmount).
         const chargedTotal = currency === 'CDF'

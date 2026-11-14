@@ -220,6 +220,7 @@ describe('OrderService', () => {
     const ref2 = tx.order.create.mock.calls[1][0].data.paymentRef;
     expect(ref1).toBeTruthy();
     expect(ref2).toBe(ref1);
+    expect(ref1).toMatch(/^[0-9a-f]{20}$/); // contrainte Araka : transactionReference String(20)
 
     // AUCUN billet généré tant que le paiement n'est pas confirmé.
     expect(tx.ticket.createMany).not.toHaveBeenCalled();
