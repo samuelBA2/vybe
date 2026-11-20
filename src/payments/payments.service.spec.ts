@@ -159,6 +159,21 @@ describe('PaymentsService.handleWebhook', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('callback Araka v1 (data.externalReference) → même résolution', async () => {
+    mockCheck('COMPLETED', '200');
+    const rawBody = JSON.stringify({
+      responseCode: '200',
+      responseDescription: 'Approved',
+      data: {
+        systemReference: 'TXN-1',
+        externalReference: PAYMENT_REF,
+        statusName: 'Approved',
+      },
+    });
+    const res = await service.handleWebhook(rawBody, signedCallback(rawBody));
+    expect(res).toEqual({ paymentRef: PAYMENT_REF, status: 'PAID' });
+  });
+
   it('payé → PAID + billets + 2 écritures ledger (organizer + platform) par commande', async () => {
     mockCheck('COMPLETED', '200');
     const { rawBody, headers } = webhook();

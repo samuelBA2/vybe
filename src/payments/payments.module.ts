@@ -7,6 +7,7 @@ import { MailModule } from 'src/mail/mail.module';
 import { PAYMENT_PROVIDER } from './payment-provider.interface';
 import { PawaPayProvider } from './pawapay.provider';
 import { ArakaProvider } from './araka.provider';
+import { ArakaV1Provider } from './araka-v1.provider';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PaymentsConfigService } from './payments-config.service';
@@ -20,8 +21,9 @@ import { PayoutModerationService } from './payout-moderation.service';
 
 // Module paiement. Le fournisseur concret est lié au token PAYMENT_PROVIDER :
 // tout le flux (createOrder, webhook, reaper, comptabilité) dépend de
-// l'interface, jamais de l'implémentation. `PAYMENT_PROVIDER=araka|pawapay`
-// (défaut : araka) choisit l'implémentation.
+// l'interface, jamais de l'implémentation. `PAYMENT_PROVIDER=araka|araka-v1|pawapay`
+// (défaut : araka) choisit l'implémentation. `araka-v1` = API marchande Araka
+// de production (clés publique/secrète, callbacks signés X-API-Signature).
 //
 // ConfigModule est global (identifiants via ConfigService) ;
 // PrismaModule fournit PrismaService (audit PaymentProviderLog).
@@ -45,12 +47,16 @@ import { PayoutModerationService } from './payout-moderation.service';
           logger.log('Fournisseur de paiement : PawaPay');
           return new PawaPayProvider(config, prisma);
         }
+        if (which === 'araka-v1') {
+          logger.log('Fournisseur de paiement : Araka (API marchande v1)');
+          return new ArakaV1Provider(config, prisma);
+        }
         if (which === 'araka') {
           logger.log('Fournisseur de paiement : Araka');
           return new ArakaProvider(config, prisma);
         }
         throw new Error(
-          `PAYMENT_PROVIDER inconnu (« ${which} »). Valeurs acceptées : araka, pawapay.`,
+          `PAYMENT_PROVIDER inconnu (« ${which} »). Valeurs acceptées : araka, araka-v1, pawapay.`,
         );
       },
       inject: [ConfigService, PrismaService],
