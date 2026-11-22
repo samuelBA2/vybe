@@ -12,8 +12,10 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // Anti-martèlement : le front sonde /status toutes les ~3 s ; on ne re-vérifie
 // le paiement auprès du fournisseur (checkStatus) qu'au plus une fois par
-// fenêtre de ce délai et par référence, pour ne pas taper PawaPay à chaque poll.
-const STATUS_RESOLVE_THROTTLE_MS = 8_000;
+// fenêtre de ce délai et par référence. 2,5 s (< 3 s du front) : chaque poll
+// déclenche une re-vérification, pour afficher le résultat au plus vite, tout
+// en bloquant les polls anormalement rapprochés (onglets multiples, rafraîchis).
+const STATUS_RESOLVE_THROTTLE_MS = 2_500;
 
 @Injectable()
 export class OrderService {
