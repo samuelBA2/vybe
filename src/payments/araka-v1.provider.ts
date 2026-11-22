@@ -267,13 +267,31 @@ export class ArakaV1Provider implements PaymentProvider {
     rawBody: string,
     headers: Record<string, string>,
   ): boolean {
-    if (!this.webhookSecret) return false;
+    const reason = this.webhookRejection(rawBody, headers);
+    if (reason) {
+      // Rejet visible dans les logs (sinon un secret mal recopié passe
+      // inaperçu : Araka ne rejoue pas le callback). Jamais le secret ni la
+      // signature reçue dans le message.
+      this.logger.warn(`Callback Araka rejeté : ${reason}`);
+      return false;
+    }
+    return true;
+  }
+
+  // Renvoie la raison du rejet, ou null si le callback est authentique.
+  private webhookRejection(
+    rawBody: string,
+    headers: Record<string, string>,
+  ): string | null {
+    if (!this.webhookSecret) {
+      return 'ARAKA_WEBHOOK_SECRET absent sur le serveur.';
+    }
 
     const signature = this.header(headers, 'x-api-signature') ?? '';
     const timestamp = Number(this.header(headers, 'x-api-timestamp'));
     const nonce = this.header(headers, 'x-api-nonce') ?? '';
     if (!signature || !nonce || !Number.isFinite(timestamp) || timestamp <= 0) {
-      return false;
+      return 'en-tête X-API-Signature / X-API-Timestamp / X-API-Nonce manquant ou invalide.';
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
@@ -281,7 +299,7 @@ export class ArakaV1Provider implements PaymentProvider {
       nowSec - timestamp > WEBHOOK_MAX_AGE_SEC ||
       timestamp - nowSec > WEBHOOK_MAX_SKEW_SEC
     ) {
-      return false;
+      return `horodatage hors fenêtre (écart ${nowSec - timestamp} s, max ${WEBHOOK_MAX_AGE_SEC} s).`;
     }
 
     const expected = createHmac('sha256', this.webhookSecret)
@@ -292,15 +310,17 @@ export class ArakaV1Provider implements PaymentProvider {
       presented.length !== expected.length ||
       !timingSafeEqual(presented, expected)
     ) {
-      return false;
+      return 'signature invalide — vérifier que ARAKA_WEBHOOK_SECRET (Render) est identique au secret du portail Araka.';
     }
 
     // Nonce vérifié APRÈS la signature : un tiers ne peut pas « consommer » un
     // nonce légitime avec une requête forgée.
     this.pruneNonces(nowSec);
-    if (this.seenNonces.has(nonce)) return false;
+    if (this.seenNonces.has(nonce)) {
+      return 'nonce déjà reçu (rejeu).';
+    }
     this.seenNonces.set(nonce, timestamp + WEBHOOK_MAX_AGE_SEC);
-    return true;
+    return null;
   }
 
   getOperators(): Promise<ProviderOperator[]> {

@@ -345,6 +345,80 @@ describe('ArakaV1Provider', () => {
       expect(provider.verifyWebhookSignature(DOC_BODY, headers())).toBe(false);
     });
 
+    // Un rejet de callback doit être visible dans les logs (sinon un secret mal
+    // recopié passe inaperçu), avec la raison — mais JAMAIS le secret ni la
+    // signature reçue.
+    describe('journalisation des rejets', () => {
+      let warn: jest.SpyInstance;
+      beforeEach(() => {
+        warn = jest
+          .spyOn(
+            (provider as unknown as { logger: { warn: () => void } }).logger,
+            'warn',
+          )
+          .mockImplementation(() => undefined);
+      });
+
+      function lastWarning(): string {
+        return String(warn.mock.calls[warn.mock.calls.length - 1]?.[0] ?? '');
+      }
+
+      it('signature invalide → warning « signature »', () => {
+        provider.verifyWebhookSignature(
+          DOC_BODY.replace('5.00', '6.00'),
+          headers(),
+        );
+        expect(lastWarning()).toMatch(/signature/i);
+        expect(lastWarning()).toMatch(/ARAKA_WEBHOOK_SECRET/);
+      });
+
+      it('horodatage trop ancien → warning « horodatage »', () => {
+        const old = String(Math.floor(Date.now() / 1000) - 10 * 60);
+        provider.verifyWebhookSignature(DOC_BODY, headers(DOC_SIGNATURE, old));
+        expect(lastWarning()).toMatch(/horodatage/i);
+      });
+
+      it('en-têtes manquants → warning « en-tête »', () => {
+        provider.verifyWebhookSignature(DOC_BODY, {});
+        expect(lastWarning()).toMatch(/en-tête/i);
+      });
+
+      it('nonce rejoué → warning « nonce »', () => {
+        const h = headers();
+        provider.verifyWebhookSignature(DOC_BODY, h);
+        provider.verifyWebhookSignature(DOC_BODY, h);
+        expect(lastWarning()).toMatch(/nonce/i);
+      });
+
+      it('secret absent → warning dédié', () => {
+        env.ARAKA_WEBHOOK_SECRET = undefined;
+        build();
+        warn = jest
+          .spyOn(
+            (provider as unknown as { logger: { warn: () => void } }).logger,
+            'warn',
+          )
+          .mockImplementation(() => undefined);
+        provider.verifyWebhookSignature(DOC_BODY, headers());
+        expect(lastWarning()).toMatch(/ARAKA_WEBHOOK_SECRET absent/);
+      });
+
+      it('callback valide → aucun warning', () => {
+        expect(provider.verifyWebhookSignature(DOC_BODY, headers())).toBe(true);
+        expect(warn).not.toHaveBeenCalled();
+      });
+
+      it('ne divulgue jamais le secret ni la signature reçue', () => {
+        provider.verifyWebhookSignature(
+          DOC_BODY.replace('5.00', '6.00'),
+          headers(),
+        );
+        const all = warn.mock.calls.map((c) => String(c[0])).join(' ');
+        expect(all).not.toContain(TEST_ENV.ARAKA_WEBHOOK_SECRET);
+        expect(all).not.toContain(DOC_SIGNATURE);
+      });
+    });
+
     it('accepte une signature calculée avec un autre secret configuré', () => {
       env.ARAKA_WEBHOOK_SECRET = 'whsec_autre';
       build();
