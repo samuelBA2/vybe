@@ -109,6 +109,13 @@ export class MyTicketsService {
                 isReservation: true,
             });
         }
+
+        // Les événements « réservation seule » sont ajoutés en fin de liste : on
+        // re-trie par startDate (asc upcoming, desc past). Array.sort est stable.
+        events.sort((a, b) => {
+            const d = a.event.startDate.getTime() - b.event.startDate.getTime();
+            return isUpcoming ? d : -d;
+        });
     }
 
     private fetchRows(userId: string, now: Date, scope: 'upcoming' | 'past') {
