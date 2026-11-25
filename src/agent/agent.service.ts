@@ -168,6 +168,93 @@ export class AgentService {
     }
   }
 
+  // Encaisser une réservation au portail : RESERVED → USED (COLLECTED), cash tracé.
+  // reservedCount INCHANGÉ : la place reste comptée parmi les places réservées.
+  async collectReservation(eventId: string, agentId: string, qrToken: string) {
+    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    if (!agent || !agent.active) throw new ForbiddenException('Agent révoqué ou inexistant.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const reservation = await tx.reservation.findUnique({
+        where: { qrToken },
+        include: { category: { include: { event: true } } },
+      });
+      if (!reservation) throw new NotFoundException('Réservation introuvable.');
+      if (reservation.eventId !== eventId) {
+        throw new ForbiddenException("Cette réservation n'appartient pas à votre événement.");
+      }
+
+      // Transition conditionnelle (anti-double-action, anti-course) : seul RESERVED passe.
+      const { count } = await tx.reservation.updateMany({
+        where: { qrToken, status: 'RESERVED' },
+        data: {
+          status: 'USED',
+          resolution: 'COLLECTED',
+          paidAtGate: true,
+          resolvedAt: new Date(),
+          resolvedByAgentId: agentId,
+        },
+      });
+      if (count !== 1) throw new ConflictException('Réservation déjà résolue.');
+
+      // Cash tracé hors ledger IOU.
+      await tx.gateCashCollection.create({
+        data: {
+          eventId,
+          reservationId: reservation.id,
+          amount: reservation.category.price,
+          currency: reservation.category.event.priceCurrency,
+          agentId,
+        },
+      });
+
+      const holderName =
+        [reservation.holderFirstName, reservation.holderLastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim() || 'Porteur inconnu';
+      return {
+        status: 'Encaissé — accès accordé.',
+        amount: reservation.category.price,
+        currency: reservation.category.event.priceCurrency,
+        holderName,
+      };
+    });
+  }
+
+  // Supprimer une réservation : RESERVED → CANCELLED (DELETED), la place est libérée.
+  async deleteReservation(eventId: string, agentId: string, qrToken: string) {
+    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    if (!agent || !agent.active) throw new ForbiddenException('Agent révoqué ou inexistant.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const reservation = await tx.reservation.findUnique({ where: { qrToken } });
+      if (!reservation) throw new NotFoundException('Réservation introuvable.');
+      if (reservation.eventId !== eventId) {
+        throw new ForbiddenException("Cette réservation n'appartient pas à votre événement.");
+      }
+
+      const { count } = await tx.reservation.updateMany({
+        where: { qrToken, status: 'RESERVED' },
+        data: {
+          status: 'CANCELLED',
+          resolution: 'DELETED',
+          resolvedAt: new Date(),
+          resolvedByAgentId: agentId,
+        },
+      });
+      if (count !== 1) throw new ConflictException('Réservation déjà résolue.');
+
+      // La place ne tient plus → le compteur recule (décrément atomique, plancher 0).
+      await tx.$executeRaw`
+        UPDATE "TicketCategory"
+        SET "reservedCount" = "reservedCount" - 1
+        WHERE "id" = ${reservation.categoryId} AND "reservedCount" > 0`;
+
+      return { status: 'Réservation supprimée.' };
+    });
+  }
+
   // Dashboard de scans réservé au créateur de l'événement (brique E).
   // Agrégation hybride : groupBy pour statuts/catégories/agents,
   // findMany léger des scannedAt (USED) pour la timeline horaire en JS.

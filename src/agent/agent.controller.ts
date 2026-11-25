@@ -46,6 +46,22 @@ export class AgentController {
     return this.agentService.scan(req.user.eventId, req.user.agentId, dto.qrToken)
   }
 
+  // Encaisser une réservation (agent) : cash tracé, accès accordé.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('AGENT')
+  @Post('agents/reservations/collect')
+  async collect(@Req() req, @Body() dto: ScanDto) {
+    return this.agentService.collectReservation(req.user.eventId, req.user.agentId, dto.qrToken);
+  }
+
+  // Supprimer une réservation (agent) : place libérée.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('AGENT')
+  @Post('agents/reservations/delete')
+  async deleteReservation(@Req() req, @Body() dto: ScanDto) {
+    return this.agentService.deleteReservation(req.user.eventId, req.user.agentId, dto.qrToken);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('USER')
   @Get('events/:reference/scan-dashboard')
