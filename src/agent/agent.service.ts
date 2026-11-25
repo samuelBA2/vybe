@@ -284,7 +284,16 @@ export class AgentService {
     // 2. Par catégorie
     const categories = await this.prisma.ticketCategory.findMany({
       where: { eventId },
-      select: { id: true, name: true, soldCount: true, totalStock: true, giftedCount: true },
+      select: {
+        id: true,
+        name: true,
+        soldCount: true,
+        totalStock: true,
+        giftedCount: true,
+        reservationEnabled: true,
+        reservedCount: true,
+        reservationCap: true,
+      },
     });
     const usedByCategory = await this.prisma.ticket.groupBy({
       by: ['ticketCategoryId'],
@@ -387,6 +396,25 @@ export class AgentService {
       byCategory: categories.map((c) => ({ name: c.name, count: c.giftedCount })),
     };
 
+    // Bloc réservations : table dédiée, aucun impact sur les agrégats de scan.
+    const reservableCats = categories.filter((c: any) => c.reservationEnabled);
+    const reservationActive = reservableCats.reduce((acc: number, c: any) => acc + c.reservedCount, 0);
+    const reservationCap = reservableCats[0]?.reservationCap ?? 0;
+    const reservationCollected = await this.prisma.reservation.count({
+      where: { eventId, resolution: 'COLLECTED' },
+    });
+    const collectionAgg = await this.prisma.gateCashCollection.aggregate({
+      where: { eventId },
+      _sum: { amount: true },
+    });
+    const reservations = {
+      active: reservationActive,
+      cap: reservationCap,
+      collected: reservationCollected,
+      totalCollected: round2(collectionAgg._sum.amount ?? 0),
+      currency: reservableCats.length > 0 ? event.priceCurrency : null,
+    };
+
     return {
       event: { reference: event.reference, title: event.title },
       totals: { total, scanned, unused, cancelled, entryRate, capacity },
@@ -395,6 +423,7 @@ export class AgentService {
       timeline,
       finances,
       gifts,
+      reservations,
     };
   }
 

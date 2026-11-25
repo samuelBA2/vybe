@@ -21,7 +21,8 @@ describe('AgentService', () => {
     ticket: { findUnique: jest.Mock; updateMany: jest.Mock; groupBy: jest.Mock; findMany: jest.Mock };
     ticketCategory: { findMany: jest.Mock };
     order: { aggregate: jest.Mock; groupBy: jest.Mock };
-    reservation: { findUnique: jest.Mock };
+    reservation: { findUnique: jest.Mock; count: jest.Mock };
+    gateCashCollection: { aggregate: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
@@ -44,7 +45,8 @@ describe('AgentService', () => {
       ticket: { findUnique: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findMany: jest.fn() },
       ticketCategory: { findMany: jest.fn() },
       order: { aggregate: jest.fn(), groupBy: jest.fn() },
-      reservation: { findUnique: jest.fn() },
+      reservation: { findUnique: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+      gateCashCollection: { aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }) },
       $queryRaw: jest.fn(),
       $transaction: jest.fn(),
     };
@@ -345,6 +347,26 @@ describe('AgentService', () => {
 
   // ─── getScanDashboard ─────────────────────────────────────────────────────────
   describe('getScanDashboard', () => {
+    it('expose le bloc reservations (actives, encaissées, total encaissé)', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'ev1', reference: 'VYBE-X', title: 'T', createdById: 'user1',
+        totalCapacity: null, priceCurrency: 'USD',
+      });
+      prisma.ticket.groupBy.mockResolvedValue([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([
+        {
+          id: 'cat0', name: 'Entrée', soldCount: 0, totalStock: null, giftedCount: 0,
+          reservationEnabled: true, reservedCount: 50, reservationCap: 50,
+        },
+      ]);
+      prisma.reservation.count.mockResolvedValue(12);
+      prisma.gateCashCollection.aggregate.mockResolvedValue({ _sum: { amount: 120 } });
+      const res = await service.getScanDashboard('user1', 'VYBE-X');
+      expect(res.reservations).toEqual({
+        active: 50, cap: 50, collected: 12, totalCollected: 120, currency: 'USD',
+      });
+    });
+
     it('événement introuvable → 404, aucune agrégation', async () => {
       prisma.event.findUnique.mockResolvedValue(null);
       await expect(service.getScanDashboard('user-1', 'VYBE-8JGBLV')).rejects.toBeInstanceOf(
