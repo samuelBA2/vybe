@@ -578,6 +578,15 @@ describe('AgentService', () => {
       expect(tx.gateCashCollection.create).not.toHaveBeenCalled();
     });
 
+    it('Supprimer : rejet si déjà résolu (QR mort) → ni décrément ni collection', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
+      tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'ev1', categoryId: 'cat0' });
+      tx.reservation.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.deleteReservation('ev1', 'ag1', 'qr-res')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+      expect(tx.gateCashCollection.create).not.toHaveBeenCalled();
+    });
+
     it('Encaisser : rejet si la réservation n’appartient pas à l’événement de l’agent', async () => {
       prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
       tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'AUTRE', category: { price: 10, event: { priceCurrency: 'USD' } } });
