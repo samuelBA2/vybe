@@ -340,4 +340,32 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
     const stocks = arg.data.ticketCategories.create.map((c: any) => c.totalStock);
     expect(stocks).toEqual([20000, 150]);
   });
+
+  it('active reservationEnabled sur la catégorie de base quand demandé', async () => {
+    const dto = baseDto({
+      ticketCategories: [
+        { name: 'Entrée', price: 10, ticketDesignUrl: 'u', reservationEnabled: true },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'u', totalStock: 100 },
+      ],
+    });
+    await service.createEvent('user-1', dto);
+    const created = prisma.event.create.mock.calls[0][0].data.ticketCategories.create;
+    expect(created[0]).toMatchObject({
+      reservationEnabled: true,
+      reservationCap: 50,
+      reservedCount: 0,
+    });
+    expect(created[1].reservationEnabled).toBe(false);
+  });
+
+  it('rejette reservationEnabled sur une catégorie non-base (index >= 1)', async () => {
+    const dto = baseDto({
+      ticketCategories: [
+        { name: 'Entrée', price: 10, ticketDesignUrl: 'u' },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'u', totalStock: 100, reservationEnabled: true },
+      ],
+    });
+    await expect(service.createEvent('user-1', dto)).rejects.toThrow(/réservation/i);
+    expect(prisma.event.create).not.toHaveBeenCalled();
+  });
 });

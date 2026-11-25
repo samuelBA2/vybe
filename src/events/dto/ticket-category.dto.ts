@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -34,4 +35,10 @@ export class TicketCategoryDto {
   @IsOptional()
   @IsString()
   benefits?: string;
+
+  // Ouvre la réservation (cash à la porte) sur CETTE catégorie. Honoré uniquement sur la
+  // catégorie de base (index 0) ; rejeté sur les catégories spéciales par EventsService.
+  @IsOptional()
+  @IsBoolean()
+  reservationEnabled?: boolean;
 }
