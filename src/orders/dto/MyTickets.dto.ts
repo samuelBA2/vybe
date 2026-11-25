@@ -4,7 +4,9 @@ import { $Enums } from '@prisma/client';
 export interface MyTicketDto {
   id: string;
   categoryName: string;
-  qrStatus: $Enums.QRStatus;
+  // RESERVED : réservation (table dédiée), pas encore un billet payé
+  qrStatus: 'UNUSED' | 'USED' | 'CANCELLED' | 'RESERVED';
+  isReservation: boolean;
   ticketDesignUrl: string;       // design de la catégorie (fond du billet, rendu client-side)
   expiresAt: Date;
   cancelledAt: Date | null;
