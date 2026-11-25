@@ -30,6 +30,7 @@ model User {
   events Event[]
   participations EventParticipant[]
   agentAccess Agent[]
+  reservations Reservation[]
 
   orders Order[]
   notifications Notification[]
@@ -157,6 +158,7 @@ model Event {
   ticketCategories TicketCategory[]
   mediaFiles       EventMedia[]
   agents           Agent[]
+  reservations     Reservation[]
 
   // Keyset GET /events : WHERE status=PUBLISHED ORDER BY startDate.
   @@index([status, startDate])
@@ -237,10 +239,16 @@ model TicketCategory {
   ticketDesignUrl String // URL de l'image de design du billet
   soldCount    Int     @default(0) //
   giftedCount  Int     @default(0) // compteur des billets offerts émis (≤ 10) ; alimente le compteur X/10 de la carte et le bloc gifts du dashboard
+
+  // --- réservation (cash à la porte) ---
+  reservationEnabled Boolean @default(false) // true = catégorie d'entrée ouverte à la réservation (une seule par événement)
+  reservationCap     Int     @default(50)    // plafond de réservations actives
+  reservedCount      Int     @default(0)     // réservations qui "tiennent" : +1 réserve, -1 supprime, INCHANGÉ à l'encaissement
   maxPerOrder  Int     @default(10) // Max billets par commande
   benefits     String?
   
   tickets      Ticket[]
+  reservations Reservation[]
   orders       Order[]
 }
 
@@ -436,4 +444,67 @@ model PayoutClaim {
 
   @@index([userId, currency, status]) // « réclamation active » par devise
   @@index([userId, createdAt])        // reprise / historique
+}
+
+enum ReservationStatus {
+  RESERVED   // réservé, non payé (QR → pop-up jaune au scan)
+  USED       // encaissé cash + admis à la porte (usage unique)
+  CANCELLED  // supprimé par l'agent
+}
+
+enum ReservationResolution {
+  PENDING    // en attente de passage à la porte
+  COLLECTED  // encaissé cash à la porte
+  DELETED    // supprimé par l'agent
+}
+
+// Réservation (cash à la porte). Entité de 1re classe : NI Order NI Ticket. Porte son propre
+// qrToken scanné à la porte, et vit tout son cycle de vie dans cette seule ligne (seul le statut change).
+model Reservation {
+  id                String                @id @default(uuid())
+  eventId           String
+  event             Event                 @relation(fields: [eventId], references: [id])
+  categoryId        String
+  category          TicketCategory        @relation(fields: [categoryId], references: [id])
+  userId            String                // compte qui réserve
+  user              User                  @relation(fields: [userId], references: [id])
+
+  qrToken           String                @unique // token opaque, scanné à la porte
+  status            ReservationStatus     @default(RESERVED)
+  resolution        ReservationResolution @default(PENDING)
+
+  // Contact saisi dans le pop-up — stocké ICI, JAMAIS sur User (le porteur peut différer
+  // du titulaire du compte → permet de faire la différence).
+  holderFirstName   String
+  holderLastName    String
+  holderPhone       String
+
+  paidAtGate        Boolean               @default(false)
+  resolvedByAgentId String?               // agent ayant encaissé/supprimé (réconciliation)
+  reservedAt        DateTime              @default(now())
+  resolvedAt        DateTime?
+  expiresAt         DateTime              // = event.endDate
+  createdAt         DateTime              @default(now())
+
+  gateCashCollection GateCashCollection?
+
+  @@index([eventId])
+  @@index([qrToken])
+  @@index([userId])
+}
+
+// Cash encaissé à la porte. SÉPARÉ du LedgerEntry (dette de Vybe envers l'organisateur) :
+// ce cash ne transite jamais par Vybe → n'affecte ni soldes ni retraits. Source du compteur
+// dashboard "Total encaissement billets réservés".
+model GateCashCollection {
+  id            String      @id @default(uuid())
+  eventId       String
+  reservationId String      @unique // 1 encaissement par réservation (idempotence)
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+  amount        Float               // = prix de la catégorie à l'instant de l'encaissement
+  currency      Currency
+  agentId       String              // agent encaisseur (attribution)
+  createdAt     DateTime    @default(now())
+
+  @@index([eventId])
 }
