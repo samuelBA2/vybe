@@ -106,7 +106,18 @@ export class EventsService {
     if (!event) {
       throw new NotFoundException('Événement introuvable.');
     }
-    return event;
+    // État de réservation de la catégorie d'entrée (pour l'UX du bouton Réserver).
+    const entry = event.ticketCategories.find((c) => c.reservationEnabled) ?? null;
+    const reservation = entry
+      ? {
+          enabled: true,
+          categoryId: entry.id,
+          reservedCount: entry.reservedCount,
+          cap: entry.reservationCap,
+          saturated: entry.reservedCount >= entry.reservationCap,
+        }
+      : { enabled: false, categoryId: null, reservedCount: 0, cap: 0, saturated: false };
+    return { ...event, reservation };
   }
 
   private async generateUniqueReference(): Promise<string>{
