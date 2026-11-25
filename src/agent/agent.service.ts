@@ -105,7 +105,39 @@ export class AgentService {
     const ticket = await this.prisma.ticket.findUnique({ where: { qrToken },
     include: { ticketCategory: true, order: { include: { user: true } } },
   });
-    if (!ticket) throw new NotFoundException("Ce billet n'appartient pas à votre événement.");
+    if (!ticket) {
+      // Pas un billet payé : on tente une réservation (pop-up jaune, aucune transition d'état).
+      const reservation = await this.prisma.reservation.findUnique({
+        where: { qrToken },
+        include: { category: { include: { event: true } } },
+      });
+      if (!reservation) throw new NotFoundException("Ce billet n'appartient pas à votre événement.");
+      if (reservation.eventId !== eventId) throw new ForbiddenException("Ce billet n'appartient pas à votre événement.");
+      if (reservation.expiresAt < new Date()) throw new ForbiddenException('Billet expiré');
+      if (reservation.status === 'CANCELLED') throw new ForbiddenException('Réservation annulée.');
+      if (reservation.status === 'USED') {
+        throw new ConflictException({
+          message: 'Réservation déjà encaissée.',
+          resolvedAt: reservation.resolvedAt?.toISOString(),
+        });
+      }
+
+      const reservedHolderName =
+        [reservation.holderFirstName, reservation.holderLastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim() || 'Porteur inconnu';
+
+      return {
+        reserved: true as const,
+        reservationId: reservation.id,
+        amount: reservation.category.price,
+        currency: reservation.category.event.priceCurrency,
+        categoryName: reservation.category.name,
+        holderName: reservedHolderName,
+        holderPhone: reservation.holderPhone,
+      };
+    }
 
     if (ticket.ticketCategory.eventId !== eventId) throw new ForbiddenException("Ce billet n'appartient pas à votre événement.")
 
