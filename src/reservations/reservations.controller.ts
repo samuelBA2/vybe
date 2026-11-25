@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  ParseUUIDPipe,
   Post,
   Query,
   Req,
@@ -28,7 +29,10 @@ export class ReservationsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('USER')
   @Get('active')
-  async active(@Req() req, @Query('eventId') eventId: string) {
+  async active(
+    @Req() req,
+    @Query('eventId', new ParseUUIDPipe()) eventId: string,
+  ) {
     return {
       hasActive: await this.reservations.hasActiveReservation(
         req.user.sub,

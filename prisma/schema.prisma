@@ -489,8 +489,9 @@ model Reservation {
   gateCashCollection GateCashCollection?
 
   @@index([eventId])
-  @@index([qrToken])
   @@index([userId])
+  @@index([eventId, status])
+  @@index([categoryId])
 }
 
 // Cash encaissé à la porte. SÉPARÉ du LedgerEntry (dette de Vybe envers l'organisateur) :

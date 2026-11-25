@@ -51,10 +51,13 @@ CREATE UNIQUE INDEX "Reservation_qrToken_key" ON "Reservation"("qrToken");
 CREATE INDEX "Reservation_eventId_idx" ON "Reservation"("eventId");
 
 -- CreateIndex
-CREATE INDEX "Reservation_qrToken_idx" ON "Reservation"("qrToken");
+CREATE INDEX "Reservation_userId_idx" ON "Reservation"("userId");
 
 -- CreateIndex
-CREATE INDEX "Reservation_userId_idx" ON "Reservation"("userId");
+CREATE INDEX "Reservation_eventId_status_idx" ON "Reservation"("eventId", "status");
+
+-- CreateIndex
+CREATE INDEX "Reservation_categoryId_idx" ON "Reservation"("categoryId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "GateCashCollection_reservationId_key" ON "GateCashCollection"("reservationId");

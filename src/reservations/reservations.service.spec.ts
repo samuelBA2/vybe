@@ -1,4 +1,8 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ReservationsService } from './reservations.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 
@@ -101,5 +105,27 @@ describe('ReservationsService', () => {
     await expect(service.create('user1', dto())).rejects.toBeInstanceOf(
       ForbiddenException,
     );
+  });
+
+  describe('hasActiveReservation', () => {
+    it.each([undefined, ''])(
+      'rejette (400) sans appeler count si eventId = %p',
+      async (eventId) => {
+        await expect(
+          service.hasActiveReservation('user1', eventId as any),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.reservation.count).not.toHaveBeenCalled();
+      },
+    );
+
+    it('délègue au count avec eventId présent', async () => {
+      prisma.reservation.count.mockResolvedValue(1);
+      await expect(service.hasActiveReservation('user1', 'ev1')).resolves.toBe(
+        true,
+      );
+      expect(prisma.reservation.count).toHaveBeenCalledWith({
+        where: { userId: 'user1', eventId: 'ev1', status: 'RESERVED' },
+      });
+    });
   });
 });

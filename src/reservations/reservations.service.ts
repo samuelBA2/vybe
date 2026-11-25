@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -86,6 +87,8 @@ export class ReservationsService {
     userId: string,
     eventId: string,
   ): Promise<boolean> {
+    // Un eventId undefined serait ignoré par Prisma (count cross-event) : on le refuse.
+    if (!eventId) throw new BadRequestException('eventId requis.');
     const count = await this.prisma.reservation.count({
       where: { userId, eventId, status: 'RESERVED' },
     });
