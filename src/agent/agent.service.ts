@@ -105,7 +105,39 @@ export class AgentService {
     const ticket = await this.prisma.ticket.findUnique({ where: { qrToken },
     include: { ticketCategory: true, order: { include: { user: true } } },
   });
-    if (!ticket) throw new NotFoundException("Ce billet n'appartient pas à votre événement.");
+    if (!ticket) {
+      // Pas un billet payé : on tente une réservation (pop-up jaune, aucune transition d'état).
+      const reservation = await this.prisma.reservation.findUnique({
+        where: { qrToken },
+        include: { category: { include: { event: true } } },
+      });
+      if (!reservation) throw new NotFoundException("Ce billet n'appartient pas à votre événement.");
+      if (reservation.eventId !== eventId) throw new ForbiddenException("Ce billet n'appartient pas à votre événement.");
+      if (reservation.expiresAt < new Date()) throw new ForbiddenException('Billet expiré');
+      if (reservation.status === 'CANCELLED') throw new ForbiddenException('Réservation annulée.');
+      if (reservation.status === 'USED') {
+        throw new ConflictException({
+          message: 'Réservation déjà encaissée.',
+          resolvedAt: reservation.resolvedAt?.toISOString(),
+        });
+      }
+
+      const reservedHolderName =
+        [reservation.holderFirstName, reservation.holderLastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim() || 'Porteur inconnu';
+
+      return {
+        reserved: true as const,
+        reservationId: reservation.id,
+        amount: reservation.category.price,
+        currency: reservation.category.event.priceCurrency,
+        categoryName: reservation.category.name,
+        holderName: reservedHolderName,
+        holderPhone: reservation.holderPhone,
+      };
+    }
 
     if (ticket.ticketCategory.eventId !== eventId) throw new ForbiddenException("Ce billet n'appartient pas à votre événement.")
 
@@ -134,6 +166,93 @@ export class AgentService {
       category: ticket.ticketCategory.name,
       holderName,
     }
+  }
+
+  // Encaisser une réservation au portail : RESERVED → USED (COLLECTED), cash tracé.
+  // reservedCount INCHANGÉ : la place reste comptée parmi les places réservées.
+  async collectReservation(eventId: string, agentId: string, qrToken: string) {
+    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    if (!agent || !agent.active) throw new ForbiddenException('Agent révoqué ou inexistant.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const reservation = await tx.reservation.findUnique({
+        where: { qrToken },
+        include: { category: { include: { event: true } } },
+      });
+      if (!reservation) throw new NotFoundException('Réservation introuvable.');
+      if (reservation.eventId !== eventId) {
+        throw new ForbiddenException("Cette réservation n'appartient pas à votre événement.");
+      }
+
+      // Transition conditionnelle (anti-double-action, anti-course) : seul RESERVED passe.
+      const { count } = await tx.reservation.updateMany({
+        where: { qrToken, status: 'RESERVED' },
+        data: {
+          status: 'USED',
+          resolution: 'COLLECTED',
+          paidAtGate: true,
+          resolvedAt: new Date(),
+          resolvedByAgentId: agentId,
+        },
+      });
+      if (count !== 1) throw new ConflictException('Réservation déjà résolue.');
+
+      // Cash tracé hors ledger IOU.
+      await tx.gateCashCollection.create({
+        data: {
+          eventId,
+          reservationId: reservation.id,
+          amount: reservation.category.price,
+          currency: reservation.category.event.priceCurrency,
+          agentId,
+        },
+      });
+
+      const holderName =
+        [reservation.holderFirstName, reservation.holderLastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim() || 'Porteur inconnu';
+      return {
+        status: 'Encaissé — accès accordé.',
+        amount: reservation.category.price,
+        currency: reservation.category.event.priceCurrency,
+        holderName,
+      };
+    });
+  }
+
+  // Supprimer une réservation : RESERVED → CANCELLED (DELETED), la place est libérée.
+  async deleteReservation(eventId: string, agentId: string, qrToken: string) {
+    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    if (!agent || !agent.active) throw new ForbiddenException('Agent révoqué ou inexistant.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const reservation = await tx.reservation.findUnique({ where: { qrToken } });
+      if (!reservation) throw new NotFoundException('Réservation introuvable.');
+      if (reservation.eventId !== eventId) {
+        throw new ForbiddenException("Cette réservation n'appartient pas à votre événement.");
+      }
+
+      const { count } = await tx.reservation.updateMany({
+        where: { qrToken, status: 'RESERVED' },
+        data: {
+          status: 'CANCELLED',
+          resolution: 'DELETED',
+          resolvedAt: new Date(),
+          resolvedByAgentId: agentId,
+        },
+      });
+      if (count !== 1) throw new ConflictException('Réservation déjà résolue.');
+
+      // La place ne tient plus → le compteur recule (décrément atomique, plancher 0).
+      await tx.$executeRaw`
+        UPDATE "TicketCategory"
+        SET "reservedCount" = "reservedCount" - 1
+        WHERE "id" = ${reservation.categoryId} AND "reservedCount" > 0`;
+
+      return { status: 'Réservation supprimée.' };
+    });
   }
 
   // Dashboard de scans réservé au créateur de l'événement (brique E).
@@ -165,7 +284,16 @@ export class AgentService {
     // 2. Par catégorie
     const categories = await this.prisma.ticketCategory.findMany({
       where: { eventId },
-      select: { id: true, name: true, soldCount: true, totalStock: true, giftedCount: true },
+      select: {
+        id: true,
+        name: true,
+        soldCount: true,
+        totalStock: true,
+        giftedCount: true,
+        reservationEnabled: true,
+        reservedCount: true,
+        reservationCap: true,
+      },
     });
     const usedByCategory = await this.prisma.ticket.groupBy({
       by: ['ticketCategoryId'],
@@ -268,6 +396,25 @@ export class AgentService {
       byCategory: categories.map((c) => ({ name: c.name, count: c.giftedCount })),
     };
 
+    // Bloc réservations : table dédiée, aucun impact sur les agrégats de scan.
+    const reservableCats = categories.filter((c: any) => c.reservationEnabled);
+    const reservationActive = reservableCats.reduce((acc: number, c: any) => acc + c.reservedCount, 0);
+    const reservationCap = reservableCats[0]?.reservationCap ?? 0;
+    const reservationCollected = await this.prisma.reservation.count({
+      where: { eventId, resolution: 'COLLECTED' },
+    });
+    const collectionAgg = await this.prisma.gateCashCollection.aggregate({
+      where: { eventId },
+      _sum: { amount: true },
+    });
+    const reservations = {
+      active: reservationActive,
+      cap: reservationCap,
+      collected: reservationCollected,
+      totalCollected: round2(collectionAgg._sum.amount ?? 0),
+      currency: reservableCats.length > 0 ? event.priceCurrency : null,
+    };
+
     return {
       event: { reference: event.reference, title: event.title },
       totals: { total, scanned, unused, cancelled, entryRate, capacity },
@@ -276,6 +423,7 @@ export class AgentService {
       timeline,
       finances,
       gifts,
+      reservations,
     };
   }
 

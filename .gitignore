@@ -83,6 +83,7 @@ docs/architecture-backend.txt
 
 # Outillage local Claude Code
 .claude/
+.superpowers/
 
 # Docs de conception / passation internes (non versionnés)
 DesignGoogleLogin.md

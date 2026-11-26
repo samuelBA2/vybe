@@ -5,11 +5,15 @@ import { MY_TICKETS_MAX_PER_SCOPE } from 'src/common/constants';
 
 describe('MyTicketsService', () => {
   let service: MyTicketsService;
-  let prisma: { ticket: { findMany: jest.Mock; findFirst: jest.Mock } };
+  let prisma: {
+    ticket: { findMany: jest.Mock; findFirst: jest.Mock };
+    reservation: { findMany: jest.Mock; findFirst: jest.Mock };
+  };
 
   beforeEach(() => {
     prisma = {
       ticket: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
+      reservation: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
     };
     service = new MyTicketsService(prisma as unknown as PrismaService);
   });
@@ -90,6 +94,7 @@ describe('MyTicketsService', () => {
       expiresAt: expect.any(Date),
       cancelledAt: null,
       ticketDesignUrl: 'design-url',
+      isReservation: false,
     });
     expect(evt.tickets[0]).not.toHaveProperty('qrToken');
   });
@@ -138,7 +143,91 @@ describe('MyTicketsService', () => {
     expect(args.orderBy[0].ticketCategory.event.startDate).toBe('desc');
   });
 
+  it('inclut les réservations du user avec isReservation=true', async () => {
+    prisma.ticket.findMany.mockResolvedValue([]); // aucun billet payé
+    const future = (ms: number) => new Date(Date.now() + ms);
+    prisma.reservation.findMany.mockImplementation((args: any) =>
+      Promise.resolve(
+        args.where.event.endDate.gte
+          ? [
+              {
+                id: 'r1',
+                status: 'RESERVED',
+                resolvedAt: null,
+                expiresAt: future(90_000_000),
+                category: {
+                  name: 'Entrée',
+                  ticketDesignUrl: 'u',
+                  event: {
+                    id: 'ev1',
+                    reference: 'VYBE-X',
+                    title: 'T',
+                    category: 'CONCERT',
+                    startDate: future(86_400_000),
+                    endDate: future(90_000_000),
+                    location: 'L',
+                    mediaFiles: [],
+                  },
+                },
+              },
+            ]
+          : [],
+      ),
+    );
+    const res = await service.getMyTickets('user1');
+    const item = res.upcoming[0].tickets[0];
+    expect(item).toMatchObject({ id: 'r1', isReservation: true, qrStatus: 'RESERVED' });
+  });
+
+  it('re-trie par startDate après fusion : réservation proche avant billet payé lointain', async () => {
+    const far = new Date(now + 10 * DAY);
+    const near = new Date(now + 2 * DAY);
+    prisma.ticket.findMany.mockImplementation((args: any) =>
+      Promise.resolve(
+        args.where.ticketCategory.event.endDate.gte
+          ? [row({ id: 't-far', eventId: 'ev-far', startDate: far, endDate: new Date(far.getTime() + 6 * HOUR) })]
+          : [],
+      ),
+    );
+    prisma.reservation.findMany.mockImplementation((args: any) =>
+      Promise.resolve(
+        args.where.event.endDate.gte
+          ? [
+              {
+                id: 'r-near',
+                status: 'RESERVED',
+                resolvedAt: null,
+                expiresAt: new Date(now + 3 * DAY),
+                category: {
+                  name: 'Entrée',
+                  ticketDesignUrl: 'u',
+                  event: {
+                    id: 'ev-near',
+                    reference: 'VYBE-NEAR',
+                    title: 'Proche',
+                    category: 'CONCERT',
+                    startDate: near,
+                    endDate: new Date(near.getTime() + 6 * HOUR),
+                    location: 'L',
+                    mediaFiles: [],
+                  },
+                },
+              },
+            ]
+          : [],
+      ),
+    );
+    const res = await service.getMyTickets('user1');
+    expect(res.upcoming.map((e) => e.event.id)).toEqual(['ev-near', 'ev-far']);
+  });
+
   describe('getQrToken', () => {
+    it('résout une réservation si l\'id n\'est pas un billet', async () => {
+      prisma.ticket.findFirst.mockResolvedValue(null);
+      prisma.reservation.findFirst.mockResolvedValue({ qrToken: 'qr-res' });
+      expect(await service.getQrToken('user1', 'r1')).toEqual({ qrToken: 'qr-res' });
+    });
+
     it('propriétaire → renvoie le token (requête jointe Ticket→Order.userId)', async () => {
       prisma.ticket.findFirst.mockResolvedValue({ qrToken: 'tok-123' });
       const res = await service.getQrToken('user-1', 't1');

@@ -59,24 +59,24 @@ export class MyTicketsController {
     const t = await this.myTicketsService.getTicketForRender(req.user.sub, id);
     const input = {
       qrToken: t.qrToken,
-      eventTitle: t.ticketCategory.event.title,
-      eventCategory: t.ticketCategory.event.category,
-      startDate: t.ticketCategory.event.startDate,
-      categoryName: t.ticketCategory.name,
-      designUrl: t.ticketCategory.ticketDesignUrl,
+      eventTitle: t.eventTitle,
+      eventCategory: t.eventCategory,
+      startDate: t.startDate,
+      categoryName: t.categoryName,
+      designUrl: t.designUrl,
     };
     const buffer = wantsPdf
       ? await this.ticketAssets.renderTicketPdf(input)
       : await this.ticketAssets.renderTicketPng(input);
 
-    const safe = `${t.ticketCategory.event.title}-${t.ticketCategory.name}`.replace(/[^\w.-]+/g, '_');
+    const safe = `${t.eventTitle}-${t.categoryName}`.replace(/[^\w.-]+/g, '_');
     res.setHeader('Content-Type', wantsPdf ? 'application/pdf' : 'image/png');
     res.setHeader('Content-Disposition', `attachment; filename="billet-${safe}.${wantsPdf ? 'pdf' : 'png'}"`);
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.setHeader('ETag', etag);
 
     // Billet offert : premier téléchargement → disparition définitive de l'onglet offerts.
-    if (t.order.paymentStatus === 'GIFT') {
+    if (t.isGift) {
       await this.myTicketsService.markGiftDownloaded(req.user.sub, id);
     }
     res.end(buffer);

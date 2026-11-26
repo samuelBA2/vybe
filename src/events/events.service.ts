@@ -10,6 +10,7 @@ import { MailService } from 'src/mail/mail.service';
 import { EventModerationService } from './event-moderation.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { randomCode } from 'src/common/generate-code';
+import { RESERVATION_DEFAULT_CAP } from 'src/common/constants';
 import { buildPage, KeysetCursor } from 'src/common/pagination';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { notificationText } from 'src/notifications/notification-text';
@@ -105,7 +106,18 @@ export class EventsService {
     if (!event) {
       throw new NotFoundException('Événement introuvable.');
     }
-    return event;
+    // État de réservation de la catégorie d'entrée (pour l'UX du bouton Réserver).
+    const entry = event.ticketCategories.find((c) => c.reservationEnabled) ?? null;
+    const reservation = entry
+      ? {
+          enabled: true,
+          categoryId: entry.id,
+          reservedCount: entry.reservedCount,
+          cap: entry.reservationCap,
+          saturated: entry.reservedCount >= entry.reservationCap,
+        }
+      : { enabled: false, categoryId: null, reservedCount: 0, cap: 0, saturated: false };
+    return { ...event, reservation };
   }
 
   private async generateUniqueReference(): Promise<string>{
@@ -152,6 +164,13 @@ export class EventsService {
     // spéciale (index ≥ 1) doit déclarer un plafond fini ≤ MAX_SPECIAL_STOCK,
     // dans les deux modes (illimité comme limité).
     const cats = dto.ticketCategories;
+
+    // Réservation autorisée UNIQUEMENT sur la catégorie de base (index 0).
+    if (cats.some((t, i) => i > 0 && t.reservationEnabled)) {
+      throw new BadRequestException(
+        'La réservation ne peut être activée que sur la catégorie d’entrée (1ʳᵉ catégorie).',
+      );
+    }
 
     for (let i = 1; i < cats.length; i++) {
       const t = cats[i];
@@ -245,6 +264,9 @@ export class EventsService {
             totalStock: i === 0 && dto.unlimitedStock === true ? null : (t.totalStock ?? null),
             maxPerOrder: t.maxPerOrder ?? 10,
             benefits: t.benefits ?? null,
+            reservationEnabled: i === 0 ? t.reservationEnabled === true : false,
+            reservationCap: RESERVATION_DEFAULT_CAP,
+            reservedCount: 0,
           })),
         },
       },

@@ -40,7 +40,82 @@ export class MyTicketsService {
     // rows a été lu en take: MAX+1 → au-delà de MAX, le plafond est dépassé.
     const truncated = rows.length > MY_TICKETS_MAX_PER_SCOPE;
     const bounded = truncated ? rows.slice(0, MY_TICKETS_MAX_PER_SCOPE) : rows;
-    return { events: this.groupByEvent(bounded), truncated };
+    const events = this.groupByEvent(bounded);
+    await this.mergeReservations(events, userId, now, scope); // injecte les réservations
+    return { events, truncated };
+    }
+
+    // Fusionne les réservations (table dédiée) dans les événements déjà groupés.
+    private async mergeReservations(
+        events: MyEventTicketsDto[],
+        userId: string,
+        now: Date,
+        scope: 'upcoming' | 'past',
+    ): Promise<void> {
+        const cutoff = new Date(now.getTime() - DAY_MS);
+        const isUpcoming = scope === 'upcoming';
+        const rows = await this.prisma.reservation.findMany({
+            where: {
+                userId,
+                // annulée visible 24h (comme un billet annulé), puis disparaît
+                OR: [{ status: { not: 'CANCELLED' } }, { resolvedAt: { gte: cutoff } }],
+                event: { endDate: isUpcoming ? { gte: now } : { lt: now } },
+            },
+            orderBy: [{ event: { startDate: isUpcoming ? 'asc' : 'desc' } }, { createdAt: 'asc' }],
+            select: {
+                id: true,
+                status: true,
+                expiresAt: true,
+                resolvedAt: true,
+                category: {
+                    select: {
+                        name: true,
+                        ticketDesignUrl: true,
+                        event: {
+                            select: {
+                                id: true, reference: true, title: true, category: true,
+                                startDate: true, endDate: true, location: true,
+                                mediaFiles: { where: { isPoster: true }, take: 1, select: { url: true } },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        const byId = new Map(events.map((e) => [e.event.id, e]));
+        for (const r of rows) {
+            const ev = r.category.event;
+            let entry = byId.get(ev.id);
+            if (!entry) {
+                entry = {
+                    event: {
+                        id: ev.id, reference: ev.reference, title: ev.title, category: ev.category,
+                        startDate: ev.startDate, endDate: ev.endDate, location: ev.location,
+                        posterUrl: ev.mediaFiles[0]?.url ?? null,
+                    },
+                    tickets: [],
+                };
+                byId.set(ev.id, entry);
+                events.push(entry);
+            }
+            entry.tickets.push({
+                id: r.id,
+                categoryName: r.category.name,
+                qrStatus: r.status, // 'RESERVED' | 'USED' | 'CANCELLED'
+                ticketDesignUrl: r.category.ticketDesignUrl,
+                expiresAt: r.expiresAt,
+                cancelledAt: r.status === 'CANCELLED' ? r.resolvedAt : null,
+                isReservation: true,
+            });
+        }
+
+        // Les événements « réservation seule » sont ajoutés en fin de liste : on
+        // re-trie par startDate (asc upcoming, desc past). Array.sort est stable.
+        events.sort((a, b) => {
+            const d = a.event.startDate.getTime() - b.event.startDate.getTime();
+            return isUpcoming ? d : -d;
+        });
     }
 
     private fetchRows(userId: string, now: Date, scope: 'upcoming' | 'past') {
@@ -133,6 +208,7 @@ export class MyTicketsService {
         ticketDesignUrl: t.ticketCategory.ticketDesignUrl,
         expiresAt: t.expiresAt,
         cancelledAt: t.cancelledAt,
+        isReservation: false,
         });
     }
 
@@ -177,37 +253,69 @@ export class MyTicketsService {
         return { events: this.groupByEvent(rows) };
     }
 
-    // Token brut du billet, réservé à son propriétaire. Requête jointe unique
-    // (Ticket→Order.userId) ; non-propriétaire → 404 (aucune fuite d'existence).
-    async getQrToken(userId: string, ticketId: string): Promise<{ qrToken: string }> {
+    // Token brut du billet OU de la réservation, réservé à son propriétaire.
+    // Non-propriétaire → 404 (aucune fuite d'existence).
+    async getQrToken(userId: string, id: string): Promise<{ qrToken: string }> {
         const ticket = await this.prisma.ticket.findFirst({
-            where: { id: ticketId, order: { userId } },
+            where: { id, order: { userId } },
             select: { qrToken: true },
         });
-        if (!ticket) throw new NotFoundException('Billet introuvable.');
-        return { qrToken: ticket.qrToken };
+        if (ticket) return { qrToken: ticket.qrToken };
+        const reservation = await this.prisma.reservation.findFirst({
+            where: { id, userId },
+            select: { qrToken: true },
+        });
+        if (reservation) return { qrToken: reservation.qrToken };
+        throw new NotFoundException('Billet introuvable.');
     }
 
-    // Données jointes pour composer le billet à la demande (route /download).
-    // Même garde d'ownership qu'ailleurs (Ticket→Order.userId en une requête) :
-    // non-propriétaire → 404, jamais 403 (pas de fuite d'existence du billet).
-    async getTicketForRender(userId: string, ticketId: string) {
+    // Données normalisées (shape plat) pour composer le billet à la demande
+    // (route /download), pour un Ticket OU une Reservation. Non-propriétaire →
+    // 404, jamais 403 (pas de fuite d'existence).
+    async getTicketForRender(userId: string, id: string) {
+        const eventSelect = { select: { title: true, category: true, startDate: true } };
         const t = await this.prisma.ticket.findFirst({
-            where: { id: ticketId, order: { userId } },
+            where: { id, order: { userId } },
             select: {
                 qrToken: true,
                 order: { select: { paymentStatus: true } },
                 ticketCategory: {
-                    select: {
-                        name: true,
-                        ticketDesignUrl: true,
-                        event: { select: { title: true, category: true, startDate: true } },
-                    },
+                    select: { name: true, ticketDesignUrl: true, event: eventSelect },
                 },
             },
         });
-        if (!t) throw new NotFoundException('Billet introuvable.');
-        return t;
+        if (t) {
+            return {
+                qrToken: t.qrToken,
+                eventTitle: t.ticketCategory.event.title,
+                eventCategory: t.ticketCategory.event.category,
+                startDate: t.ticketCategory.event.startDate,
+                categoryName: t.ticketCategory.name,
+                designUrl: t.ticketCategory.ticketDesignUrl,
+                isGift: t.order.paymentStatus === 'GIFT',
+            };
+        }
+        const r = await this.prisma.reservation.findFirst({
+            where: { id, userId },
+            select: {
+                qrToken: true,
+                category: {
+                    select: { name: true, ticketDesignUrl: true, event: eventSelect },
+                },
+            },
+        });
+        if (r) {
+            return {
+                qrToken: r.qrToken,
+                eventTitle: r.category.event.title,
+                eventCategory: r.category.event.category,
+                startDate: r.category.event.startDate,
+                categoryName: r.category.name,
+                designUrl: r.category.ticketDesignUrl,
+                isGift: false,
+            };
+        }
+        throw new NotFoundException('Billet introuvable.');
     }
 
     // Marque un billet OFFERT comme téléchargé (disparition définitive de l'onglet).

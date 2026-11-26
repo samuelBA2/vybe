@@ -20,6 +20,7 @@ import { AgentModule } from './agent/agent.module';
 import { OrderModule } from './orders/Order.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
+import { ReservationsModule } from './reservations/reservations.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { PaymentsModule } from './payments/payments.module';
     OrderModule,
     NotificationsModule,
     PaymentsModule,
+    ReservationsModule,
   ],
   controllers: [AppController],
   providers: [

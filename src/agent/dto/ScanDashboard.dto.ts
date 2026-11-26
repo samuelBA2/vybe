@@ -36,4 +36,12 @@ export interface ScanDashboardResponseDto {
         total: number;
         byCategory: { name: string; count: number }[];
     };
+    // Réservations cash à la porte (3 compteurs distincts).
+    reservations: {
+        active: number;         // réservations qui tiennent (X / cap)
+        cap: number;            // plafond de la catégorie d'entrée
+        collected: number;      // "Réservé-puis-payé" : réservations encaissées
+        totalCollected: number; // "Total encaissement billets réservés"
+        currency: 'USD' | 'CDF' | null;
+    };
 }

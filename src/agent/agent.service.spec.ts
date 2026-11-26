@@ -21,7 +21,15 @@ describe('AgentService', () => {
     ticket: { findUnique: jest.Mock; updateMany: jest.Mock; groupBy: jest.Mock; findMany: jest.Mock };
     ticketCategory: { findMany: jest.Mock };
     order: { aggregate: jest.Mock; groupBy: jest.Mock };
+    reservation: { findUnique: jest.Mock; count: jest.Mock };
+    gateCashCollection: { aggregate: jest.Mock };
     $queryRaw: jest.Mock;
+    $transaction: jest.Mock;
+  };
+  let tx: {
+    $executeRaw: jest.Mock;
+    reservation: { findUnique: jest.Mock; updateMany: jest.Mock };
+    gateCashCollection: { create: jest.Mock };
   };
 
   beforeEach(() => {
@@ -37,14 +45,26 @@ describe('AgentService', () => {
       ticket: { findUnique: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findMany: jest.fn() },
       ticketCategory: { findMany: jest.fn() },
       order: { aggregate: jest.fn(), groupBy: jest.fn() },
+      reservation: { findUnique: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+      gateCashCollection: { aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }) },
       $queryRaw: jest.fn(),
+      $transaction: jest.fn(),
     };
+    // Client transactionnel mocké (actions Encaisser / Supprimer).
+    tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      reservation: { findUnique: jest.fn(), updateMany: jest.fn() },
+      gateCashCollection: { create: jest.fn().mockResolvedValue({}) },
+    };
+    prisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
     // Défauts « vides » pour l'agrégation finances du dashboard
     prisma.order.aggregate.mockResolvedValue({
       _sum: { totalAmount: null, platformFee: null, organizerAmount: null, quantity: null },
       _count: 0,
     });
     prisma.order.groupBy.mockResolvedValue([]);
+    // Pas de réservation par défaut : un qrToken inconnu reste un 404.
+    prisma.reservation.findUnique.mockResolvedValue(null);
     // Timeline agrégée en SQL ($queryRaw) : défaut vide.
     prisma.$queryRaw.mockResolvedValue([]);
     service = new AgentService(prisma as unknown as PrismaService);
@@ -274,6 +294,46 @@ describe('AgentService', () => {
       await expect(service.scan('event-1', 'agent-1', 'qr-1')).rejects.toBeInstanceOf(ConflictException);
     });
 
+    it('scan d’un qrToken de réservation RESERVED renvoie le payload de recouvrement', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(null); // pas un billet payé
+      prisma.reservation.findUnique.mockResolvedValue({
+        id: 'r1',
+        status: 'RESERVED',
+        eventId: 'event-1',
+        expiresAt: new Date(Date.now() + 86400000),
+        holderFirstName: 'Ada',
+        holderLastName: 'L',
+        holderPhone: '+243900000000',
+        category: { name: 'Entrée', price: 10, event: { priceCurrency: 'USD' } },
+      });
+      const res: any = await service.scan('event-1', 'agent-1', 'qr-res');
+      expect(res).toMatchObject({
+        reserved: true,
+        reservationId: 'r1',
+        amount: 10,
+        currency: 'USD',
+        categoryName: 'Entrée',
+        holderPhone: '+243900000000',
+      });
+      expect(res.holderName).toContain('Ada');
+    });
+
+    it('scan rejette une réservation d’un autre événement', async () => {
+      prisma.agent.findUnique.mockResolvedValue(activeAgent);
+      prisma.ticket.findUnique.mockResolvedValue(null);
+      prisma.reservation.findUnique.mockResolvedValue({
+        id: 'r1',
+        status: 'RESERVED',
+        eventId: 'AUTRE',
+        expiresAt: new Date(Date.now() + 86400000),
+        category: { name: 'E', price: 10, event: { priceCurrency: 'USD' } },
+      });
+      await expect(service.scan('event-1', 'agent-1', 'qr-res')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+
     it('porteur sans nom → holderName "Porteur inconnu"', async () => {
       prisma.agent.findUnique.mockResolvedValue(activeAgent);
       prisma.ticket.findUnique.mockResolvedValue(
@@ -287,6 +347,26 @@ describe('AgentService', () => {
 
   // ─── getScanDashboard ─────────────────────────────────────────────────────────
   describe('getScanDashboard', () => {
+    it('expose le bloc reservations (actives, encaissées, total encaissé)', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'ev1', reference: 'VYBE-X', title: 'T', createdById: 'user1',
+        totalCapacity: null, priceCurrency: 'USD',
+      });
+      prisma.ticket.groupBy.mockResolvedValue([]);
+      prisma.ticketCategory.findMany.mockResolvedValue([
+        {
+          id: 'cat0', name: 'Entrée', soldCount: 0, totalStock: null, giftedCount: 0,
+          reservationEnabled: true, reservedCount: 50, reservationCap: 50,
+        },
+      ]);
+      prisma.reservation.count.mockResolvedValue(12);
+      prisma.gateCashCollection.aggregate.mockResolvedValue({ _sum: { amount: 120 } });
+      const res = await service.getScanDashboard('user1', 'VYBE-X');
+      expect(res.reservations).toEqual({
+        active: 50, cap: 50, collected: 12, totalCollected: 120, currency: 'USD',
+      });
+    });
+
     it('événement introuvable → 404, aucune agrégation', async () => {
       prisma.event.findUnique.mockResolvedValue(null);
       await expect(service.getScanDashboard('user-1', 'VYBE-8JGBLV')).rejects.toBeInstanceOf(
@@ -465,6 +545,52 @@ describe('AgentService', () => {
       });
       expect(res.finances.gross).toBe(res.finances.platformFee + res.finances.net);
       expect(res.byCategory[0].revenue).toBe(300);
+    });
+  });
+  // ─── Actions agent sur réservation ────────────────────────────────────────────
+  describe('Réservations : Encaisser / Supprimer', () => {
+    it('Encaisser : RESERVED → USED + GateCashCollection, reservedCount inchangé', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
+      tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'ev1', holderFirstName: 'A', holderLastName: 'B', category: { price: 10, event: { priceCurrency: 'USD' } } });
+      tx.reservation.updateMany.mockResolvedValue({ count: 1 });
+      const res = await service.collectReservation('ev1', 'ag1', 'qr-res');
+      expect(tx.reservation.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'USED', resolution: 'COLLECTED', paidAtGate: true, resolvedByAgentId: 'ag1' });
+      expect(tx.gateCashCollection.create.mock.calls[0][0].data).toMatchObject({ eventId: 'ev1', reservationId: 'r1', amount: 10, currency: 'USD', agentId: 'ag1' });
+      expect(tx.$executeRaw).not.toHaveBeenCalled(); // reservedCount INCHANGÉ
+      expect(res).toMatchObject({ amount: 10, currency: 'USD' });
+    });
+
+    it('Encaisser : rejet si déjà résolu (updateMany count 0)', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
+      tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'ev1', category: { price: 10, event: { priceCurrency: 'USD' } } });
+      tx.reservation.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.collectReservation('ev1', 'ag1', 'qr-res')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.gateCashCollection.create).not.toHaveBeenCalled();
+    });
+
+    it('Supprimer : RESERVED → CANCELLED + reservedCount -= 1, pas de collection', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
+      tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'ev1', categoryId: 'cat0' });
+      tx.reservation.updateMany.mockResolvedValue({ count: 1 });
+      await service.deleteReservation('ev1', 'ag1', 'qr-res');
+      expect(tx.reservation.updateMany.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', resolution: 'DELETED', resolvedByAgentId: 'ag1' });
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1); // décrément reservedCount
+      expect(tx.gateCashCollection.create).not.toHaveBeenCalled();
+    });
+
+    it('Supprimer : rejet si déjà résolu (QR mort) → ni décrément ni collection', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
+      tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'ev1', categoryId: 'cat0' });
+      tx.reservation.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.deleteReservation('ev1', 'ag1', 'qr-res')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+      expect(tx.gateCashCollection.create).not.toHaveBeenCalled();
+    });
+
+    it('Encaisser : rejet si la réservation n’appartient pas à l’événement de l’agent', async () => {
+      prisma.agent.findUnique.mockResolvedValue({ id: 'ag1', active: true });
+      tx.reservation.findUnique.mockResolvedValue({ id: 'r1', status: 'RESERVED', eventId: 'AUTRE', category: { price: 10, event: { priceCurrency: 'USD' } } });
+      await expect(service.collectReservation('ev1', 'ag1', 'qr-res')).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });

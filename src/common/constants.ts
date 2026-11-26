@@ -118,3 +118,6 @@ export const MIN_CLAIM_AMOUNT: Record<$Enums.Currency, number> = {
   USD: 1,
   CDF: 2500,
 };
+
+// Plafond par défaut de réservations actives (cash à la porte) par catégorie d'entrée.
+export const RESERVATION_DEFAULT_CAP = 50;

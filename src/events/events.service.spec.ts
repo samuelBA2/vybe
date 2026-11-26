@@ -188,6 +188,36 @@ describe('EventsService.createEvent', () => {
       const args = prisma.event.findUnique.mock.calls[0][0];
       expect(args.include.ticketCategories).toBeTruthy();
     });
+
+    it('findOne expose l’état de réservation de la catégorie d’entrée', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'ev1', reference: 'VYBE-X', title: 'T',
+        ticketCategories: [
+          { id: 'cat0', name: 'Entrée', price: 10, reservationEnabled: true, reservationCap: 50, reservedCount: 50 },
+          { id: 'cat1', name: 'VIP', price: 50, reservationEnabled: false, reservationCap: 50, reservedCount: 0 },
+        ],
+        mediaFiles: [], createdBy: {},
+      });
+      const res: any = await service.findOne('ev1');
+      expect(res.reservation).toEqual({ enabled: true, categoryId: 'cat0', reservedCount: 50, cap: 50, saturated: true });
+      expect(res.ticketCategories).toHaveLength(2);
+
+      // Non saturé
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'ev2', mediaFiles: [], createdBy: {},
+        ticketCategories: [{ id: 'c', reservationEnabled: true, reservationCap: 50, reservedCount: 10 }],
+      });
+      const res2: any = await service.findOne('ev2');
+      expect(res2.reservation.saturated).toBe(false);
+
+      // Aucune catégorie réservable
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'ev3', mediaFiles: [], createdBy: {},
+        ticketCategories: [{ id: 'c', reservationEnabled: false, reservationCap: 50, reservedCount: 0 }],
+      });
+      const res3: any = await service.findOne('ev3');
+      expect(res3.reservation).toEqual({ enabled: false, categoryId: null, reservedCount: 0, cap: 0, saturated: false });
+    });
   });
 });
 
@@ -339,5 +369,33 @@ describe('EventsService.createEvent — stock limité/illimité', () => {
     expect(arg.data.totalCapacity).toBe(50000);
     const stocks = arg.data.ticketCategories.create.map((c: any) => c.totalStock);
     expect(stocks).toEqual([20000, 150]);
+  });
+
+  it('active reservationEnabled sur la catégorie de base quand demandé', async () => {
+    const dto = baseDto({
+      ticketCategories: [
+        { name: 'Entrée', price: 10, ticketDesignUrl: 'u', reservationEnabled: true },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'u', totalStock: 100 },
+      ],
+    });
+    await service.createEvent('user-1', dto);
+    const created = prisma.event.create.mock.calls[0][0].data.ticketCategories.create;
+    expect(created[0]).toMatchObject({
+      reservationEnabled: true,
+      reservationCap: 50,
+      reservedCount: 0,
+    });
+    expect(created[1].reservationEnabled).toBe(false);
+  });
+
+  it('rejette reservationEnabled sur une catégorie non-base (index >= 1)', async () => {
+    const dto = baseDto({
+      ticketCategories: [
+        { name: 'Entrée', price: 10, ticketDesignUrl: 'u' },
+        { name: 'VIP', price: 50, ticketDesignUrl: 'u', totalStock: 100, reservationEnabled: true },
+      ],
+    });
+    await expect(service.createEvent('user-1', dto)).rejects.toThrow(/réservation/i);
+    expect(prisma.event.create).not.toHaveBeenCalled();
   });
 });
